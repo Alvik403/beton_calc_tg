@@ -10,6 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY config ./config
-COPY .env.example ./.env.example
-
 CMD ["python", "-m", "app.main"]
