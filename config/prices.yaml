@@ -1,0 +1,95 @@
+prices:
+  - name: "БСТ B7,5 F50 W2"
+    no_delivery_no_vat: 4875
+    no_delivery_vat_22: 5947.5
+    pickup_no_vat: 4875
+    pickup_vat_22: 5950
+  - name: "БСТ B7,5 F100 W4"
+    no_delivery_no_vat: 5500
+    no_delivery_vat_22: 6710
+  - name: "БСТ B10 F50 W2"
+    no_delivery_no_vat: 5167
+    no_delivery_vat_22: 6303.74
+    pickup_no_vat: 5167
+    pickup_vat_22: 6300
+  - name: "БСТ B12,5"
+    no_delivery_no_vat: 5192
+    no_delivery_vat_22: 6334.24
+  - name: "БСТ B12,5 F50 W2"
+    no_delivery_no_vat: 5192
+    no_delivery_vat_22: 6334.24
+    pickup_no_vat: 5192
+    pickup_vat_22: 6335
+  - name: "БСТ B15 F50 W2"
+    no_delivery_no_vat: 5209
+    no_delivery_vat_22: 6354.98
+    pickup_no_vat: 5542
+    pickup_vat_22: 6760
+  - name: "БСТ B15 F150 W6"
+    no_delivery_no_vat: 5850
+    no_delivery_vat_22: 7137
+    pickup_no_vat: 6100
+    pickup_vat_22: 7445
+  - name: "БСТ В20"
+    no_delivery_no_vat: 5542
+    no_delivery_vat_22: 6761.24
+  - name: "БСТ В20 F100 W4"
+    no_delivery_no_vat: 5584
+    no_delivery_vat_22: 6812.48
+    pickup_no_vat: 5833
+    pickup_vat_22: 7120
+  - name: "БСТ В20 F150 W6"
+    no_delivery_no_vat: 5750
+    no_delivery_vat_22: 7015
+    pickup_no_vat: 6125
+    pickup_vat_22: 7475
+  - name: "БСТ В22,5 F100 W4"
+    no_delivery_no_vat: 5709
+    no_delivery_vat_22: 6964.98
+    pickup_no_vat: 5958
+    pickup_vat_22: 7270
+  - name: "БСТ В25 F150 W6"
+    no_delivery_no_vat: 6167
+    no_delivery_vat_22: 7523.74
+    pickup_no_vat: 6667
+    pickup_vat_22: 8135
+  - name: "БСТ В25 F150 W8 (в ДС № 3)"
+    no_delivery_no_vat: 6417
+    no_delivery_vat_22: 7828.74
+    pickup_no_vat: 6833
+    pickup_vat_22: 8340
+  - name: "БСТ В30 F150 W6"
+    no_delivery_no_vat: 6667
+    no_delivery_vat_22: 8133.74
+    pickup_no_vat: 6958
+    pickup_vat_22: 8490
+  - name: "БСТ В30 F200 W8"
+    no_delivery_no_vat: 6709
+    no_delivery_vat_22: 8184.98
+    pickup_no_vat: 7125
+    pickup_vat_22: 8695
+  - name: "БСТ В35 F200 W8"
+    no_delivery_no_vat: 7000
+    no_delivery_vat_22: 8540
+    pickup_no_vat: 7250
+    pickup_vat_22: 8845
+  - name: "БСТ В40 F300 W10"
+    no_delivery_no_vat: 7250
+    no_delivery_vat_22: 8845
+    pickup_no_vat: 7500
+    pickup_vat_22: 9150
+  - name: "Растворная смесь М100"
+    no_delivery_no_vat: 4159
+    no_delivery_vat_22: 5073.98
+    pickup_no_vat: 4408
+    pickup_vat_22: 5380
+  - name: "Растворная смесь М150"
+    no_delivery_no_vat: 4634
+    no_delivery_vat_22: 5653.48
+    pickup_no_vat: 4883
+    pickup_vat_22: 5960
+  - name: "Растворная смесь М200"
+    no_delivery_no_vat: 5275
+    no_delivery_vat_22: 6435.5
+    pickup_no_vat: 5525
+    pickup_vat_22: 6740
