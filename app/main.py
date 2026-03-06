@@ -118,7 +118,51 @@ def _build_prices_dataframe(
             "ОКРУГЛ. САМОВЫВОЗ С НДС 22%": price_pickup_vat,
         }
         rows.append(row)
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+
+    BLANK_LEFT = "__blank_left__"
+    BLANK_COST_1 = "__blank_cost_1__"
+    BLANK_COST_2 = "__blank_cost_2__"
+    BLANK_ROUND_1 = "__blank_round_1__"
+    BLANK_ROUND_2 = "__blank_round_2__"
+
+    df[BLANK_LEFT] = ""
+    df[BLANK_COST_1] = ""
+    df[BLANK_COST_2] = ""
+    df[BLANK_ROUND_1] = ""
+    df[BLANK_ROUND_2] = ""
+
+    name_col = "Наименование"
+    c1 = "Стоимость без доставки без НДС"
+    c2 = "Стоимость без доставки с НДС 22%"
+    c3 = "Стоимость самовывоз без НДС"
+    c4 = "Стоимость самовывоз с НДС 22%"
+    spacer = " "
+    r1 = "Округл. БЕЗ ДОСТАВКИ БЕЗ НДС"
+    r2 = "БЕЗ ДОСТАВКИ С НДС 22%"
+    r3 = "САМОВЫВОЗ БЕЗ НДС"
+    r4 = "ОКРУГЛ. САМОВЫВОЗ С НДС 22%"
+
+    ordered = [
+        name_col,
+        BLANK_LEFT,
+        c1,
+        c2,
+        BLANK_COST_1,
+        c3,
+        c4,
+        spacer,
+        r1,
+        r2,
+        BLANK_ROUND_1,
+        BLANK_ROUND_2,
+        r3,
+        r4,
+    ]
+
+    df = df[ordered]
+    return df
 
 
 async def handle_start(message: Message) -> None:
@@ -253,6 +297,18 @@ async def handle_document(message: Message, bot: Bot) -> None:
                             if isinstance(c.value, (int, float, Decimal)):
                                 c.number_format = "#,##0.00"
 
+            blank_cols = set()
+            for blank_name in [
+                "__blank_left__",
+                "__blank_cost_1__",
+                "__blank_cost_2__",
+                "__blank_round_1__",
+                "__blank_round_2__",
+                " ",
+            ]:
+                if blank_name in prices_df.columns:
+                    blank_cols.add(prices_df.columns.get_loc(blank_name) + 1)
+
             for row_idx in range(prices_header_row, prices_end_row + 1):
                 for cell in ws.iter_rows(
                     min_row=row_idx, max_row=row_idx, min_col=1, max_col=prices_end_col
@@ -264,7 +320,10 @@ async def handle_document(message: Message, bot: Bot) -> None:
                             if 0 <= data_idx < len(prices_df.index):
                                 name = prices_df.iloc[data_idx, 0]
                                 is_highlight = _normalize_name(str(name)) in highlight_names
-                        if c.value is None or str(c.value).strip() == "":
+                        if c.column in blank_cols:
+                            c.border = Border()
+                            c.fill = PatternFill(fill_type=None)
+                        elif c.value is None or str(c.value).strip() == "":
                             c.border = spacer_border
                             c.fill = PatternFill(fill_type=None)
                         elif c.column == 2:
@@ -292,6 +351,75 @@ async def handle_document(message: Message, bot: Bot) -> None:
                 if "Стоимость" in name or "БЕЗ ДОСТАВКИ" in name or "САМОВЫВОЗ" in name:
                     if name.strip():
                         price_columns.add(idx)
+
+            # выделяем максимальные значения по каждой ценовой колонке жирным
+            price_cols = [
+                "Стоимость без доставки без НДС",
+                "Стоимость без доставки с НДС 22%",
+                "Стоимость самовывоз без НДС",
+                "Стоимость самовывоз с НДС 22%",
+            ]
+            for col_name in price_cols:
+                if col_name not in prices_df.columns:
+                    continue
+                col_idx = prices_df.columns.get_loc(col_name) + 1
+                try:
+                    series = prices_df[col_name]
+                    max_val = series.max()
+                except Exception:
+                    continue
+                if pd.isna(max_val):
+                    continue
+                for row_offset, val in enumerate(series, start=0):
+                    if pd.isna(val):
+                        continue
+                    if abs(Decimal(str(val)) - Decimal(str(max_val))) > Decimal(
+                        "0.0000001"
+                    ):
+                        continue
+                    excel_row = prices_start_row + row_offset
+                    cell = ws.cell(row=excel_row, column=col_idx)
+                    cell.font = Font(bold=True)
+
+            # очищаем заголовки у служебных пустых колонок
+            for blank_name in [
+                "__blank_left__",
+                "__blank_cost_1__",
+                "__blank_cost_2__",
+                "__blank_round_1__",
+                "__blank_round_2__",
+            ]:
+                if blank_name in prices_df.columns:
+                    b_col = prices_df.columns.get_loc(blank_name) + 1
+                    ws.cell(row=prices_header_row, column=b_col).value = ""
+
+            # группирующие заголовки над блоками цен
+            group_row = prices_header_row - 1
+            # стоимости
+            ws.merge_cells(
+                start_row=group_row, start_column=3, end_row=group_row, end_column=4
+            )
+            g1 = ws.cell(row=group_row, column=3, value="для организации А")
+            ws.merge_cells(
+                start_row=group_row, start_column=6, end_row=group_row, end_column=7
+            )
+            g2 = ws.cell(row=group_row, column=6, value="для иных организаций")
+            # округлённые цены
+            ws.merge_cells(
+                start_row=group_row, start_column=9, end_row=group_row, end_column=10
+            )
+            g3 = ws.cell(row=group_row, column=9, value="для организации А")
+            ws.merge_cells(
+                start_row=group_row, start_column=13, end_row=group_row, end_column=14
+            )
+            g4 = ws.cell(row=group_row, column=13, value="для иных организаций")
+
+            title_font_size = (header_font.sz or 11) + 1
+            for gcell in (g1, g2, g3, g4):
+                gcell.font = Font(bold=True, size=title_font_size)
+                gcell.alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True
+                )
 
             for column_cells in ws.columns:
                 max_len = 0
