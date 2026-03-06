@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import tempfile
 import time
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +38,10 @@ def _is_rate_limited(ip: str) -> bool:
         return True
     _last_request_per_ip[ip] = now
     return False
+
+
+def _money(volume_m3: Decimal, price_per_m3: float) -> Decimal:
+    return Decimal(str(volume_m3)) * Decimal(str(price_per_m3))
 
 
 def _normalize_name(text: str) -> str:
@@ -98,10 +103,10 @@ def _build_output_dataframe(
     rows = []
     for recipe in recipes:
         max_m3, required = calculate_max_cubic_meters(recipe, balances)
-        row = {"Наименование": recipe.name, "Максимум, м3": round(max_m3, 3)}
+        row = {"Наименование": recipe.name, "Максимум, м3": max_m3}
         for material in all_materials:
-            value = required.get(material, 0.0)
-            row[f"Нужно, кг {material}"] = round(value, 3)
+            value = required.get(material, Decimal("0"))
+            row[f"Нужно, кг {material}"] = value
         rows.append(row)
 
     return pd.DataFrame(rows)
@@ -121,14 +126,10 @@ def _build_prices_dataframe(
 
         row = {
             "Наименование": recipe.name,
-            "Стоимость без доставки без НДС": round(
-                max_m3 * price_no_delivery_no_vat, 2
-            ),
-            "Стоимость без доставки с НДС 22%": round(
-                max_m3 * price_no_delivery_vat, 2
-            ),
-            "Стоимость самовывоз без НДС": round(max_m3 * price_pickup_no_vat, 2),
-            "Стоимость самовывоз с НДС 22%": round(max_m3 * price_pickup_vat, 2),
+            "Стоимость без доставки без НДС": _money(max_m3, price_no_delivery_no_vat),
+            "Стоимость без доставки с НДС 22%": _money(max_m3, price_no_delivery_vat),
+            "Стоимость самовывоз без НДС": _money(max_m3, price_pickup_no_vat),
+            "Стоимость самовывоз с НДС 22%": _money(max_m3, price_pickup_vat),
             " ": "",
             "Округл. БЕЗ ДОСТАВКИ БЕЗ НДС": price_no_delivery_no_vat,
             "БЕЗ ДОСТАВКИ С НДС 22%": price_no_delivery_vat,
@@ -239,11 +240,9 @@ def _build_excel(balances: dict[str, float]) -> bytes:
                         c.alignment = header_align
                     else:
                         c.alignment = body_align
-                        if isinstance(c.value, (int, float)):
-                            if c.column == 2:
-                                c.number_format = "#,##0.000"
-                            else:
-                                c.number_format = "#,##0.00"
+                        if isinstance(c.value, (int, float, Decimal)):
+                            # Значение хранится полное, отображаем 2 знака после запятой.
+                            c.number_format = "#,##0.00"
 
         for row_idx in range(prices_header_row, prices_end_row + 1):
             for cell in ws.iter_rows(
@@ -276,7 +275,7 @@ def _build_excel(balances: dict[str, float]) -> bytes:
                         c.alignment = header_align
                     else:
                         c.alignment = body_align
-                        if isinstance(c.value, (int, float)):
+                        if isinstance(c.value, (int, float, Decimal)):
                             c.number_format = "#,##0.00"
 
         for column_cells in ws.columns:
@@ -288,10 +287,9 @@ def _build_excel(balances: dict[str, float]) -> bytes:
                 max_len = max(max_len, len(str(cell.value)))
             if max_len:
                 auto_width = min(max_len + 2, 60)
-                if col == "A":
-                    ws.column_dimensions[col].width = auto_width
-                else:
-                    ws.column_dimensions[col].width = max(auto_width * 0.5, 6)
+                # Не сужаем числовые колонки, иначе Excel визуально округляет
+                # значения (например, 472.621959... выглядит как 472.622).
+                ws.column_dimensions[col].width = max(auto_width, 10)
 
     output.seek(0)
     return output.read()

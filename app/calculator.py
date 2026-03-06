@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 
 @dataclass(frozen=True)
@@ -11,15 +12,16 @@ class Recipe:
 
 def calculate_max_cubic_meters(
     recipe: Recipe, balances: dict[str, float]
-) -> tuple[float, dict[str, float]]:
+) -> tuple[Decimal, dict[str, Decimal]]:
     limits = []
     for material, per_m3 in recipe.materials.items():
-        if per_m3 <= 0:
+        per_m3_d = Decimal(str(per_m3))
+        if per_m3_d <= 0:
             continue
-        available = balances.get(material, 0.0)
-        limits.append(available / per_m3 if per_m3 > 0 else 0.0)
+        available_d = Decimal(str(balances.get(material, 0.0)))
+        limits.append(available_d / per_m3_d)
     if not limits:
-        return 0.0, {}
+        return Decimal("0"), {}
     max_m3 = min(limits)
-    required = {m: max_m3 * v for m, v in recipe.materials.items()}
+    required = {m: max_m3 * Decimal(str(v)) for m, v in recipe.materials.items()}
     return max_m3, required
