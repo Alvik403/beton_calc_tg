@@ -4,7 +4,7 @@ import io
 import json
 import tempfile
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -30,13 +30,227 @@ _last_request_per_ip: dict[str, float] = {}
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
 PROFILES_PATH = CONFIG_DIR / "web_profiles.json"
+JBI_PROFILES_PATH = CONFIG_DIR / "web_profiles_jbi.json"
+CONFIG_PASSWORD = "06032026"
+CONFIG_SCOPE_BETON = "beton"
+CONFIG_SCOPE_JBI = "jbi"
+JBI_BASE_ITEM_NAME = "ЖБИ 1"
+JBI_BASE_MATERIAL_NAMES = [
+    "БСТ В40 F150 W8 (ЖБИ)",
+    "Кладочная сетка 200*200 2,0*3,0 ф5 ГОСТ 23279-2012",
+    "Опалубка под плиту перекрытия",
+    "Опалубка под продольную стену тип А",
+    "Опалубка под продольную стену тип В",
+    "Опалубка под торцевую стену тип В",
+    "Опалубка под торцевую стену тип А",
+    "ЗД-2 закладная деталь",
+    "Кладочная сетка 200*200 2,0*6,0 ф5",
+    "Г-500-500-8 армозаготовка",
+    "К-2930-70-8 армокаркас",
+    "КА-2930-60-52-8 армокаркас",
+    "КР-3400-300-10 армокаркас",
+    "Смазка для распалубки Forma CS-10 (кг)",
+    "КГ-2930-250-8А армокаркас",
+    "КГ-2930-250-8В армокаркас",
+    "6А500С L=3440 армозаготовка",
+    "Проволока вязальная d=1,2мм (кг)",
+    "ЗД-1 закладная деталь",
+    "П-350-60-6 армозаготовка",
+    "Г-500-500-8* армозаготовка",
+    "6А500С L=2085 армозаготовка",
+    "Г-350-350-6 армозаготовка",
+    "Фиксатор потолочная опора 20/25/30/35, Усиленный",
+    "6А500С L=2090 армозаготовка",
+    'Фиксатор "Звездочка" 15 мм',
+]
+JBI_BASE_UNIT_PRICES = [
+    7139.38,
+    717.14,
+    3921.36,
+    3296.03,
+    3296.03,
+    2665.07,
+    2662.26,
+    688.47,
+    1700.00,
+    29.93,
+    176.92,
+    270.09,
+    374.77,
+    163.22,
+    487.85,
+    487.85,
+    48.11,
+    108.33,
+    106.54,
+    13.64,
+    29.93,
+    28.97,
+    21.45,
+    2.92,
+    29.91,
+    1.67,
+]
+JBI_BASE_COUNTS = [
+    10,
+    10,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    1,
+    21,
+    5,
+    3,
+    2,
+    10,
+    1,
+    1,
+    9,
+    3,
+    2,
+    21,
+    36,
+    2,
+    15,
+    0,
+    75,
+    0,
+]
+JBI_BASE_TOTAL_PRICE = 106388.03
+JBI_BASE_ALIASES = {
+    "БСТ В40 F150 W8 (ЖБИ)": ["БСТ В40 F150 W8 (ЖБИ)"],
+    "Кладочная сетка 200*200 2,0*3,0 ф5 ГОСТ 23279-2012": [
+        "Кладочная сетка 200*200 2,0*3,0 ф5 ГОСТ 23279-2012",
+        "Кладочная сетка 200*200 2,0*6,0 ф5",
+    ],
+    "Опалубка под плиту перекрытия": ["Опалубка под плиту перекрытия"],
+    "Опалубка под продольную стену тип А": ["Опалубка под продольную стену тип А"],
+    "Опалубка под продольную стену тип В": ["Опалубка под продольную стену тип В"],
+    "Опалубка под торцевую стену тип В": ["Опалубка под торцевую стену тип В"],
+    "Опалубка под торцевую стену тип А": ["Опалубка под торцевую стену тип А"],
+    "ЗД-2 закладная деталь": ["ЗД-2 закладная деталь"],
+    "Кладочная сетка 200*200 2,0*6,0 ф5": ["Кладочная сетка 200*200 2,0*6,0 ф5"],
+    "Г-500-500-8 армозаготовка": ["Г-500-500-8 армозаготовка"],
+    "К-2930-70-8 армокаркас": ["К-2930-70-8 армокаркас"],
+    "КА-2930-60-52-8 армокаркас": ["КА-2930-60-52-8 армокаркас"],
+    "КР-3400-300-10 армокаркас": ["КР-3400-300-10 армокаркас"],
+    "Смазка для распалубки Forma CS-10 (кг)": [
+        "Смазка для распалубки Forma CS-10 (кг)",
+        "Смазка для опалубки ТираФорм (1 бочка=200л)",
+    ],
+    "КГ-2930-250-8А армокаркас": ["КГ-2930-250-8А армокаркас"],
+    "КГ-2930-250-8В армокаркас": ["КГ-2930-250-8В армокаркас"],
+    "6А500С L=3440 армозаготовка": [
+        "6А500С L=3440 армозаготовка",
+        "8А500С L=3440 армозаготовка",
+    ],
+    "Проволока вязальная d=1,2мм (кг)": ["Проволока вязальная d=1,2мм (кг)"],
+    "ЗД-1 закладная деталь": ["ЗД-1 закладная деталь"],
+    "П-350-60-6 армозаготовка": [
+        "П-350-60-6 армозаготовка",
+        "П-370-60-6 армозаготовка",
+    ],
+    "Г-500-500-8* армозаготовка": [
+        "Г-500-500-8* армозаготовка",
+        "Г-500-500-8 армозаготовка",
+    ],
+    "6А500С L=2085 армозаготовка": [
+        "6А500С L=2085 армозаготовка",
+        "6А500С L=2090 армозаготовка",
+    ],
+    "Г-350-350-6 армозаготовка": [
+        "Г-350-350-6 армозаготовка",
+        "Г-350-350-8 армозаготовка",
+    ],
+    "Фиксатор потолочная опора 20/25/30/35, Усиленный": [
+        "Фиксатор потолочная опора 20/25/30/35, Усиленный",
+    ],
+    "6А500С L=2090 армозаготовка": ["6А500С L=2090 армозаготовка"],
+    'Фиксатор "Звездочка" 15 мм': ['Фиксатор "Звездочка" 15 мм'],
+}
 
 
-def _load_profiles() -> Dict[str, Any]:
-    if not PROFILES_PATH.exists():
+def _jbi_default_materials() -> List[Dict[str, Any]]:
+    return [
+        {"name": name, "aliases": JBI_BASE_ALIASES.get(name, [name])}
+        for name in JBI_BASE_MATERIAL_NAMES
+    ]
+
+
+def _jbi_default_recipes() -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": JBI_BASE_ITEM_NAME,
+            "materials": {
+                name: count
+                for name, count in zip(JBI_BASE_MATERIAL_NAMES, JBI_BASE_COUNTS)
+            },
+        }
+    ]
+
+
+def _jbi_default_prices() -> List[Dict[str, Any]]:
+    material_prices = []
+    for name, price in zip(JBI_BASE_MATERIAL_NAMES, JBI_BASE_UNIT_PRICES):
+        material_prices.append(
+            {
+                "name": name,
+                "no_delivery_no_vat": price,
+                "no_delivery_vat_22": round(price * 1.22, 2),
+                "pickup_no_vat": price,
+                "pickup_vat_22": round(price * 1.22, 2),
+            }
+        )
+    material_prices.append(
+        {
+            "name": JBI_BASE_ITEM_NAME,
+            "no_delivery_no_vat": JBI_BASE_TOTAL_PRICE,
+            "no_delivery_vat_22": round(JBI_BASE_TOTAL_PRICE * 1.22, 2),
+            "pickup_no_vat": JBI_BASE_TOTAL_PRICE,
+            "pickup_vat_22": round(JBI_BASE_TOTAL_PRICE * 1.22, 2),
+        }
+    )
+    return material_prices
+
+
+def _validate_scope(scope: Optional[str]) -> str:
+    if scope == CONFIG_SCOPE_JBI:
+        return CONFIG_SCOPE_JBI
+    return CONFIG_SCOPE_BETON
+
+
+def _profiles_path(scope: Optional[str]) -> Path:
+    return JBI_PROFILES_PATH if _validate_scope(scope) == CONFIG_SCOPE_JBI else PROFILES_PATH
+
+
+def _default_config_payload(scope: Optional[str]) -> Dict[str, Any]:
+    if _validate_scope(scope) == CONFIG_SCOPE_JBI:
+        return {
+            "materials": _jbi_default_materials(),
+            "recipes": _jbi_default_recipes(),
+            "prices": _jbi_default_prices(),
+        }
+    return {
+        "materials": load_materials_config(),
+        "recipes": load_recipes_config(),
+        "prices": load_prices_config(),
+    }
+
+
+def _require_config_password(request: Request) -> None:
+    if request.headers.get("X-Config-Password") != CONFIG_PASSWORD:
+        raise HTTPException(status_code=401, detail="Неверный пароль конфигуратора")
+
+
+def _load_profiles(scope: Optional[str] = None) -> Dict[str, Any]:
+    path = _profiles_path(scope)
+    if not path.exists():
         return {"profiles": [], "active": None}
     try:
-        with PROFILES_PATH.open("r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
             if not isinstance(data, dict):
                 return {"profiles": [], "active": None}
@@ -47,9 +261,10 @@ def _load_profiles() -> Dict[str, Any]:
         return {"profiles": [], "active": None}
 
 
-def _save_profiles(data: Dict[str, Any]) -> None:
-    PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with PROFILES_PATH.open("w", encoding="utf-8") as f:
+def _save_profiles(data: Dict[str, Any], scope: Optional[str] = None) -> None:
+    path = _profiles_path(scope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
@@ -89,10 +304,15 @@ def _normalize_name(text: str) -> str:
     return text
 
 
-def _load_materials() -> list[MaterialConfig]:
-    profiles = _load_profiles()
-    active = _get_profile(profiles, profiles.get("active"))
-    raw = active.get("materials") if active and "materials" in active else load_materials_config()
+def _load_materials(
+    scope: Optional[str] = None, profile_name: Optional[str] = None
+) -> list[MaterialConfig]:
+    scope = _validate_scope(scope)
+    profiles = _load_profiles(scope)
+    active_name = profile_name if profile_name is not None else profiles.get("active")
+    active = _get_profile(profiles, active_name)
+    base = _default_config_payload(scope)["materials"]
+    raw = active.get("materials") if active and "materials" in active else base
     materials: list[MaterialConfig] = []
     for item in raw:
         name = item.get("name", "").strip()
@@ -102,10 +322,15 @@ def _load_materials() -> list[MaterialConfig]:
     return materials
 
 
-def _load_recipes() -> list[Recipe]:
-    profiles = _load_profiles()
-    active = _get_profile(profiles, profiles.get("active"))
-    raw = active.get("recipes") if active and "recipes" in active else load_recipes_config()
+def _load_recipes(
+    scope: Optional[str] = None, profile_name: Optional[str] = None
+) -> list[Recipe]:
+    scope = _validate_scope(scope)
+    profiles = _load_profiles(scope)
+    active_name = profile_name if profile_name is not None else profiles.get("active")
+    active = _get_profile(profiles, active_name)
+    base = _default_config_payload(scope)["recipes"]
+    raw = active.get("recipes") if active and "recipes" in active else base
     recipes: list[Recipe] = []
     for item in raw:
         name = item.get("name", "").strip()
@@ -115,14 +340,18 @@ def _load_recipes() -> list[Recipe]:
     return recipes
 
 
-def _load_prices() -> dict[str, dict[str, float]]:
-    profiles = _load_profiles()
-    active = _get_profile(profiles, profiles.get("active"))
+def _load_prices(
+    scope: Optional[str] = None, profile_name: Optional[str] = None
+) -> dict[str, dict[str, float]]:
+    scope = _validate_scope(scope)
+    profiles = _load_profiles(scope)
+    active_name = profile_name if profile_name is not None else profiles.get("active")
+    active = _get_profile(profiles, active_name)
     raw_list: List[Dict[str, Any]]
     if active and "prices" in active:
         raw_list = active.get("prices") or []
     else:
-        raw_list = load_prices_config()
+        raw_list = _default_config_payload(scope)["prices"]
     prices: dict[str, dict[str, float]] = {}
     for item in raw_list:
         name = item.get("name", "").strip()
@@ -231,10 +460,14 @@ def _build_prices_dataframe(
     return df
 
 
-def _build_summary(balances: dict[str, float]) -> Dict[str, Any]:
+def _build_summary(
+    balances: dict[str, float],
+    scope: Optional[str] = None,
+    profile_name: Optional[str] = None,
+) -> Dict[str, Any]:
     """Построить краткую сводку по объемам и ценам для вывода на сайт."""
-    recipes = _load_recipes()
-    prices = _load_prices()
+    recipes = _load_recipes(scope=scope, profile_name=profile_name)
+    prices = _load_prices(scope=scope, profile_name=profile_name)
 
     output_df = _build_output_dataframe(recipes, balances)
     prices_df = _build_prices_dataframe(recipes, balances, prices)
@@ -293,14 +526,61 @@ def _build_summary(balances: dict[str, float]) -> Dict[str, Any]:
         )
 
     return {
+        "kind": "beton",
         "items": items,
         "total_volume": float(total_volume),
     }
 
 
-def _build_excel(balances: dict[str, float]) -> bytes:
-    recipes = _load_recipes()
-    prices = _load_prices()
+def _build_jbi_summary(
+    raw_balances: dict[str, float], profile_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Рассчитать максимум изделий ЖБИ с учетом доступного бетона."""
+    jbi_recipes = _load_recipes(scope=CONFIG_SCOPE_JBI, profile_name=profile_name)
+    jbi_prices = _load_prices(scope=CONFIG_SCOPE_JBI, profile_name=profile_name)
+
+    beton_materials = _load_materials(scope=CONFIG_SCOPE_BETON)
+    beton_recipes = _load_recipes(scope=CONFIG_SCOPE_BETON)
+    beton_balances = {
+        key: value for key, value in raw_balances.items() if key in {m.name for m in beton_materials}
+    }
+
+    concrete_limits: dict[str, float] = {}
+    for recipe in beton_recipes:
+        max_m3, _ = calculate_max_cubic_meters(recipe, beton_balances)
+        concrete_limits[recipe.name] = float(max_m3)
+
+    effective_balances = dict(raw_balances)
+    effective_balances.update(concrete_limits)
+
+    items: list[Dict[str, Any]] = []
+    for recipe in jbi_recipes:
+        max_units_raw, _ = calculate_max_cubic_meters(recipe, effective_balances)
+        max_units = int(max_units_raw.to_integral_value(rounding=ROUND_FLOOR))
+        price = jbi_prices.get(_normalize_name(recipe.name), {})
+        unit_price = float(price.get("no_delivery_no_vat", 0.0) or 0.0)
+        items.append(
+            {
+                "name": recipe.name,
+                "max_units": max_units,
+                "unit_price": unit_price,
+                "total_price": float(Decimal(str(unit_price)) * Decimal(str(max_units))),
+            }
+        )
+
+    return {
+        "kind": "jbi",
+        "items": items,
+    }
+
+
+def _build_excel(
+    balances: dict[str, float],
+    scope: Optional[str] = None,
+    profile_name: Optional[str] = None,
+) -> bytes:
+    recipes = _load_recipes(scope=scope, profile_name=profile_name)
+    prices = _load_prices(scope=scope, profile_name=profile_name)
 
     output_df = _build_output_dataframe(recipes, balances)
     prices_df = _build_prices_dataframe(recipes, balances, prices)
@@ -727,7 +1007,8 @@ async def index() -> HTMLResponse:
                 color: #10233f;
             }
             .result-num {
-                text-align: right;
+                text-align: center;
+                vertical-align: middle;
                 white-space: nowrap;
                 font-variant-numeric: tabular-nums;
             }
@@ -809,6 +1090,14 @@ async def index() -> HTMLResponse:
                 color: #184a8b;
                 background: #eaf4ff;
                 cursor: pointer;
+            }
+            .btn-row {
+                display: flex;
+                gap: 8px;
+                margin-top: 4px;
+            }
+            .btn-row .btn {
+                margin-top: 0;
             }
             .hp-field {
                 position: absolute;
@@ -1051,13 +1340,19 @@ async def index() -> HTMLResponse:
                                         <label>Ваш сайт</label>
                                         <input type="text" name="website" autocomplete="off" />
                                     </div>
-                                    <button class="btn" type="submit">Загрузить и посчитать</button>
+                                    <div class="btn-row">
+                                        <button class="btn" type="button" id="calcOnlyBtn">Посчитать</button>
+                                        <button class="btn" type="button" id="downloadBtn">Скачать</button>
+                                    </div>
                                 </form>
                             </div>
                         </div>
                         <div class="stack-section">
                             <div class="rail-section-title">Расчет ЖБИ</div>
                             <div class="box">
+                                <button type="button" class="cfg-btn" id="jbiCfgBtn" title="Настройки ЖБИ">
+                                    ⚙
+                                </button>
                                 <h1>Загрузка файла</h1>
                                 <form id="jbiForm" action="#" enctype="multipart/form-data">
                                     <div class="field">
@@ -1074,7 +1369,10 @@ async def index() -> HTMLResponse:
                                         <label>Ваш сайт</label>
                                         <input type="text" name="website" autocomplete="off" />
                                     </div>
-                                    <button class="btn" type="submit">Загрузить и посчитать</button>
+                                    <div class="btn-row">
+                                        <button class="btn" type="button" id="jbiCalcOnlyBtn">Посчитать</button>
+                                        <button class="btn" type="button" id="jbiDownloadBtn">Скачать</button>
+                                    </div>
                                 </form>
                             </div>
                         </div>
@@ -1090,7 +1388,7 @@ async def index() -> HTMLResponse:
             <div class="cfg-panel-inner">
                 <div class="cfg-header">
                     <div>
-                        <div class="cfg-title">Настройки конфигурации</div>
+                        <div class="cfg-title" id="cfgTitle">Настройки конфигурации</div>
                         <div class="cfg-hint">Редактирование работает только для веб-сервиса, бот использует базовую конфигурацию.</div>
                     </div>
                     <button type="button" class="cfg-close" id="cfgClose" aria-label="Закрыть">×</button>
@@ -1128,7 +1426,7 @@ async def index() -> HTMLResponse:
                     </div>
                     <div id="cfgPaneRecipes" class="cfg-pane">
                         <div class="cfg-section">
-                            <label>Виды бетона и их составляющие (кг на 1 м³)</label>
+                            <label>Позиции и их составляющие (кг на 1 м³)</label>
                             <div id="cfgRecipesList"></div>
                             <button type="button" class="cfg-btn-sec cfg-add-row" id="cfgRecipesAdd">+ Добавить состав</button>
                         </div>
@@ -1151,9 +1449,11 @@ async def index() -> HTMLResponse:
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             var cfgBtn = document.getElementById('cfgBtn');
+            var jbiCfgBtn = document.getElementById('jbiCfgBtn');
             var cfgPanel = document.getElementById('cfgPanel');
 
             var cfgClose = document.getElementById('cfgClose');
+            var cfgTitle = document.getElementById('cfgTitle');
             var sel = document.getElementById('cfgProfileSelect');
             var saveBtn = document.getElementById('cfgProfileSave');
             var applyBtn = document.getElementById('cfgProfileApply');
@@ -1165,14 +1465,21 @@ async def index() -> HTMLResponse:
             var cfgPricesBody = document.getElementById('cfgPricesBody');
             var calcForm = document.getElementById('calcForm');
             var resultBox = document.getElementById('resultBox');
+            var calcOnlyBtn = document.getElementById('calcOnlyBtn');
+            var downloadBtn = document.getElementById('downloadBtn');
             var jbiForm = document.getElementById('jbiForm');
             var jbiProfileSelect = document.getElementById('jbiProfileSelect');
+            var jbiCalcOnlyBtn = document.getElementById('jbiCalcOnlyBtn');
+            var jbiDownloadBtn = document.getElementById('jbiDownloadBtn');
 
             if (!cfgBtn || !cfgPanel) {
                 return;
             }
 
             var currentMaterialNames = [];
+            var currentExternalMaterialNames = [];
+            var currentConfigScope = 'beton';
+            var currentPanelPassword = null;
 
             function setActiveTab(tabKey) {
                 var tabs = document.querySelectorAll('.cfg-tab');
@@ -1194,64 +1501,84 @@ async def index() -> HTMLResponse:
                 });
             }
 
-            function openPanel() {
+            function getScopeTitle(scope) {
+                return scope === 'jbi' ? 'Настройки конфигурации ЖБИ' : 'Настройки конфигурации бетона';
+            }
+            function getProfileLabel(scope) {
+                return scope === 'jbi' ? 'Изделия и их составляющие (кг на 1 м³)' : 'Виды бетона и их составляющие (кг на 1 м³)';
+            }
+            function askConfigPassword() {
+                var entered = window.prompt('Введите пароль конфигуратора');
+                if (!entered) return null;
+                return String(entered);
+            }
+            function configFetch(url, options, passwordOverride) {
+                options = options || {};
+                var password = passwordOverride != null ? passwordOverride : currentPanelPassword;
+                if (!password) {
+                    password = askConfigPassword();
+                }
+                if (!password) {
+                    return Promise.reject(new Error('Пароль не введен'));
+                }
+                options.headers = options.headers || {};
+                options.headers['X-Config-Password'] = password;
+                return fetch(url, options).then(function(res) {
+                    if (res.status === 401) {
+                        currentPanelPassword = null;
+                    }
+                    return res;
+                });
+            }
+            function openPanel(scope) {
+                currentConfigScope = scope === 'jbi' ? 'jbi' : 'beton';
+                if (cfgTitle) cfgTitle.textContent = getScopeTitle(currentConfigScope);
+                var password = askConfigPassword();
+                if (!password) return;
+                currentPanelPassword = password;
                 cfgPanel.style.display = 'flex';
-                loadConfig();
+                loadConfig(password);
             }
             function closePanel() {
+                currentPanelPassword = null;
                 cfgPanel.style.display = 'none';
             }
 
-            function loadMainProfileSelect() {
-                if (!mainProfileSelect || !window.fetch) return;
-                return fetch('/api/config')
+            function fillProfileSelect(selectEl, profiles, active) {
+                if (!selectEl) return;
+                selectEl.innerHTML = '<option value="__base__">По умолчанию</option>';
+                for (var i = 0; i < profiles.length; i++) {
+                    var opt = document.createElement('option');
+                    opt.value = profiles[i].name;
+                    opt.textContent = profiles[i].name;
+                    selectEl.appendChild(opt);
+                }
+                selectEl.value = active || '__base__';
+            }
+            function loadProfileOptions(scope, selectEl) {
+                if (!selectEl || !window.fetch) return;
+                return fetch('/api/config/options?scope=' + encodeURIComponent(scope))
                     .then(function(res) {
                         if (!res.ok) return null;
                         return res.json();
                     })
                     .then(function(data) {
                         if (!data) return;
-                        var active = data.active_profile || '__base__';
-                        mainProfileSelect.innerHTML = '<option value="__base__">По умолчанию</option>';
-                        if (jbiProfileSelect) jbiProfileSelect.innerHTML = '<option value="__base__">По умолчанию</option>';
-                        var profiles = data.profiles || [];
-                        for (var i = 0; i < profiles.length; i++) {
-                            var opt = document.createElement('option');
-                            opt.value = profiles[i].name;
-                            opt.textContent = profiles[i].name;
-                            mainProfileSelect.appendChild(opt);
-                            if (jbiProfileSelect) {
-                                var jbiOpt = document.createElement('option');
-                                jbiOpt.value = profiles[i].name;
-                                jbiOpt.textContent = profiles[i].name;
-                                jbiProfileSelect.appendChild(jbiOpt);
-                            }
-                        }
-                        mainProfileSelect.value = active;
-                        if (jbiProfileSelect) jbiProfileSelect.value = active;
+                        fillProfileSelect(selectEl, data.profiles || [], data.active_profile || '__base__');
                     })
                     .catch(function(e) {
                         console.error(e);
                     });
             }
-
-            if (mainProfileSelect) {
-                mainProfileSelect.addEventListener('change', function() {
-                    if (!window.fetch) return;
-                    var name = mainProfileSelect.value;
-                    fetch('/api/config/profile/select', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: name === '__base__' ? null : name }),
-                    }).catch(function(e) {
-                        console.error(e);
-                    });
-                });
+            function loadMainProfileSelects() {
+                loadProfileOptions('beton', mainProfileSelect);
+                loadProfileOptions('jbi', jbiProfileSelect);
             }
 
-            loadMainProfileSelect();
+            loadMainProfileSelects();
 
-            cfgBtn.addEventListener('click', openPanel);
+            cfgBtn.addEventListener('click', function() { openPanel('beton'); });
+            if (jbiCfgBtn) jbiCfgBtn.addEventListener('click', function() { openPanel('jbi'); });
 
             if (cfgClose) cfgClose.addEventListener('click', closePanel);
             cfgPanel.addEventListener('click', function(e) {
@@ -1263,6 +1590,36 @@ async def index() -> HTMLResponse:
             }
             function escapeHtml(s) {
                 return String(s || '').replace(/</g, '&lt;');
+            }
+            function formatNumber(value, digits) {
+                if (value == null || isNaN(value)) return '—';
+                var fixed = Number(value).toFixed(digits);
+                var parts = fixed.split('.');
+                parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+                return parts.join('.');
+            }
+            function setScopeTexts() {
+                var lbl = document.querySelector('#cfgPaneRecipes .cfg-section label');
+                var btn = document.getElementById('cfgRecipesAdd');
+                if (lbl) lbl.textContent = getProfileLabel(currentConfigScope);
+                if (btn) btn.textContent = currentConfigScope === 'jbi' ? '+ Добавить состав ЖБИ' : '+ Добавить состав';
+            }
+            function getAvailableMaterialNames() {
+                var all = [];
+                var seen = {};
+                for (var i = 0; i < currentMaterialNames.length; i++) {
+                    if (!seen[currentMaterialNames[i]]) {
+                        seen[currentMaterialNames[i]] = true;
+                        all.push(currentMaterialNames[i]);
+                    }
+                }
+                for (var j = 0; j < currentExternalMaterialNames.length; j++) {
+                    if (!seen[currentExternalMaterialNames[j]]) {
+                        seen[currentExternalMaterialNames[j]] = true;
+                        all.push(currentExternalMaterialNames[j]);
+                    }
+                }
+                return all;
             }
 
             function renderMaterials(arr) {
@@ -1287,7 +1644,7 @@ async def index() -> HTMLResponse:
 
             function renderRecipes(arr, materialNames) {
                 arr = arr || [];
-                var names = materialNames || currentMaterialNames || [];
+                var names = materialNames || getAvailableMaterialNames();
                 if (!cfgRecipesList) return;
                 cfgRecipesList.innerHTML = '';
                 for (var i = 0; i < arr.length; i++) {
@@ -1330,7 +1687,7 @@ async def index() -> HTMLResponse:
                     block.innerHTML =
                         '<h4>Состав</h4><div class="cfg-recipe-name"><input type="text" class="rec-name" value="' +
                         escapeAttr(rec.name || '') +
-                        '" placeholder="Наименование бетона" /></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody>' +
+                        '" placeholder="Наименование позиции" /></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody>' +
                         matsHtml +
                         '</tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
                     cfgRecipesList.appendChild(block);
@@ -1432,15 +1789,19 @@ async def index() -> HTMLResponse:
                 return out;
             }
 
-            function loadConfig() {
+            function loadConfig(password) {
                 if (!window.fetch) return;
-                return fetch('/api/config')
+                setScopeTexts();
+                return configFetch('/api/config?scope=' + encodeURIComponent(currentConfigScope), {}, password)
                     .then(function(res) {
-                        if (!res.ok) return null;
+                        if (!res.ok) {
+                            return res.text().then(function(t) {
+                                throw new Error(t || 'Ошибка загрузки настроек');
+                            });
+                        }
                         return res.json();
                     })
                     .then(function(data) {
-                        if (!data) return;
                         if (sel) {
                             sel.innerHTML = '<option value="__base__">Базовая конфигурация</option>';
                             var profiles = data.profiles || [];
@@ -1453,15 +1814,18 @@ async def index() -> HTMLResponse:
                             sel.value = data.active_profile || '__base__';
                         }
                         renderMaterials(data.materials || []);
+                        currentExternalMaterialNames = data.external_materials || [];
                         var mats = data.materials || [];
                         var names = [];
                         for (var i2 = 0; i2 < mats.length; i2++) names.push(mats[i2].name);
+                        for (var i3 = 0; i3 < currentExternalMaterialNames.length; i3++) names.push(currentExternalMaterialNames[i3]);
                         renderRecipes(data.recipes || [], names);
                         renderPrices(data.prices || []);
-                        loadMainProfileSelect();
+                        loadMainProfileSelects();
                     })
                     .catch(function(e) {
-                        console.error(e);
+                        alert('Ошибка доступа к конфигуратору: ' + (e && e.message ? e.message : e));
+                        closePanel();
                     });
             }
 
@@ -1481,11 +1845,12 @@ async def index() -> HTMLResponse:
                     if (!window.fetch) return;
                     var body = {
                         name: name,
+                        scope: currentConfigScope,
                         recipes: getRecipesFromUI(),
                         prices: getPricesFromUI(),
                         materials: getMaterialsFromUI(),
                     };
-                    fetch('/api/config/profile', {
+                    configFetch('/api/config/profile', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body),
@@ -1516,10 +1881,10 @@ async def index() -> HTMLResponse:
                 applyBtn.addEventListener('click', function() {
                     if (!window.fetch) return;
                     var name = sel ? sel.value : '__base__';
-                    fetch('/api/config/profile/select', {
+                    configFetch('/api/config/profile/select', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: name }),
+                        body: JSON.stringify({ name: name, scope: currentConfigScope }),
                     })
                         .then(function(res) {
                             if (res.ok) return null;
@@ -1545,7 +1910,7 @@ async def index() -> HTMLResponse:
                         return;
                     }
                     if (!confirm('Удалить набор настроек "' + name + '"?')) return;
-                    fetch('/api/config/profile/' + encodeURIComponent(name), { method: 'DELETE' })
+                    configFetch('/api/config/profile/' + encodeURIComponent(name) + '?scope=' + encodeURIComponent(currentConfigScope), { method: 'DELETE' })
                         .then(function(res) {
                             if (res.ok) return null;
                             return res.text().then(function(t) {
@@ -1580,9 +1945,7 @@ async def index() -> HTMLResponse:
             }
             if (cfgRecipesAdd && cfgRecipesList) {
                 cfgRecipesAdd.addEventListener('click', function() {
-                    var mats = getMaterialsFromUI();
-                    var materialNames = [];
-                    for (var i = 0; i < mats.length; i++) materialNames.push(mats[i].name);
+                    var materialNames = getAvailableMaterialNames();
                     var opts = '';
                     if (materialNames.length) {
                         for (var j = 0; j < materialNames.length; j++) {
@@ -1593,7 +1956,7 @@ async def index() -> HTMLResponse:
                     }
                     var block = document.createElement('div');
                     block.className = 'cfg-recipe-block';
-                    block.innerHTML = '<h4>Состав</h4><div class="cfg-recipe-name"><input type="text" class="rec-name" placeholder="Наименование бетона" /></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody><tr><td><select class="rec-mat-name">' + opts + '</select></td><td><input type="number" step="any" class="rec-mat-kg" /></td><td class="col-del"><button type="button" class="cfg-btn-sm cfg-del-rec-row" title="Удалить">✕</button></td></tr></tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
+                    block.innerHTML = '<h4>Состав</h4><div class="cfg-recipe-name"><input type="text" class="rec-name" placeholder="Наименование позиции" /></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody><tr><td><select class="rec-mat-name">' + opts + '</select></td><td><input type="number" step="any" class="rec-mat-kg" /></td><td class="col-del"><button type="button" class="cfg-btn-sm cfg-del-rec-row" title="Удалить">✕</button></td></tr></tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
                     cfgRecipesList.appendChild(block);
                 });
             }
@@ -1623,9 +1986,7 @@ async def index() -> HTMLResponse:
                 if (e.target.classList.contains('cfg-add-rec-row')) {
                     var block = safeClosest(e.target, '.cfg-recipe-block');
                     var tbody = block ? block.querySelector('tbody') : null;
-                    var mats2 = getMaterialsFromUI();
-                    var materialNames2 = [];
-                    for (var i = 0; i < mats2.length; i++) materialNames2.push(mats2[i].name);
+                    var materialNames2 = getAvailableMaterialNames();
                     var opts2 = '';
                     if (materialNames2.length) {
                         for (var j = 0; j < materialNames2.length; j++) {
@@ -1640,20 +2001,18 @@ async def index() -> HTMLResponse:
                 }
             });
 
-            // основная форма расчета: отправка через fetch, показ сводки и скачивание результата
-            if (calcForm && window.fetch && resultBox) {
-                calcForm.addEventListener('submit', function(e) {
-                    e.preventDefault();
+            // основная форма расчета: отдельные действия "Посчитать" и "Скачать"
+            if (calcForm && window.fetch && resultBox && calcOnlyBtn && downloadBtn) {
+                function runBetonCalculation(shouldDownload) {
                     var fileInput = document.getElementById('file');
                     if (!fileInput || !fileInput.files || !fileInput.files[0]) {
                         alert('Выберите файл .xlsx');
                         return;
                     }
-                    var btn = calcForm.querySelector('.btn');
-                    if (btn) {
-                        btn.disabled = true;
-                        btn.textContent = 'Считаем...';
-                    }
+                    calcOnlyBtn.disabled = true;
+                    downloadBtn.disabled = true;
+                    calcOnlyBtn.textContent = shouldDownload ? 'Посчитать' : 'Считаем...';
+                    downloadBtn.textContent = shouldDownload ? 'Скачиваем...' : 'Скачать';
                     resultBox.classList.remove('result-ok');
                     resultBox.classList.remove('result-empty');
                     resultBox.classList.remove('has-result');
@@ -1661,11 +2020,9 @@ async def index() -> HTMLResponse:
 
                     var fdSummary = new FormData(calcForm);
                     fdSummary.set('mode', 'summary');
+                    fdSummary.set('scope', 'beton');
+                    fdSummary.set('profile_name', mainProfileSelect ? mainProfileSelect.value : '__base__');
 
-                    var fdExcel = new FormData(calcForm);
-                    fdExcel.set('mode', 'excel');
-
-                    // сначала получаем сводку
                     fetch('/upload', { method: 'POST', body: fdSummary })
                         .then(function(res) {
                             if (!res.ok) {
@@ -1675,53 +2032,16 @@ async def index() -> HTMLResponse:
                             }
                             return res.json();
                         })
-                        .then(function(summary) {
-                            // затем скачиваем Excel
-                            return fetch('/upload', { method: 'POST', body: fdExcel }).then(function(res) {
-                                if (!res.ok) {
-                                    return res.text().then(function(t) {
-                                        throw new Error(t || 'Ошибка сервера при формировании Excel');
-                                    });
-                                }
-                                return res.blob().then(function(blob) {
-                                    return { blob: blob, summary: summary, headers: res.headers };
-                                });
-                            });
-                        })
                         .then(function(result) {
-                            var blob = result.blob;
-                            var summary = result.summary || {};
-                            var headers = result.headers;
-                            var fileName = 'raschet_po_ostatkam.xlsx';
-                            var disp = null;
-                            try {
-                                disp = headers ? headers.get('Content-Disposition') : null;
-                            } catch (e) {}
-                            if (disp) {
-                                var m = /filename=\"?([^\";]+)\"?/i.exec(disp);
-                                if (m) fileName = m[1];
-                            }
-
-                            var url = window.URL.createObjectURL(blob);
-                            var a = document.createElement('a');
-                            a.href = url;
-                            a.download = fileName;
-                            document.body.appendChild(a);
-                            a.click();
-                            setTimeout(function() {
-                                document.body.removeChild(a);
-                                window.URL.revokeObjectURL(url);
-                            }, 0);
-
-                            var items = summary.items || [];
+                            var items = result.items || [];
 
                             var html = '';
 
                             function fmtVolume(v) {
-                                return v != null && !isNaN(v) ? String(v.toFixed ? v.toFixed(3) : v) : '—';
+                                return formatNumber(v, 3);
                             }
                             function fmtMoney(v) {
-                                return v != null && !isNaN(v) ? String(v.toFixed ? v.toFixed(2) : v) + ' ₽' : '—';
+                                return v != null && !isNaN(v) ? formatNumber(v, 2) + ' ₽' : '—';
                             }
                             function getMaxIndex(sourceItems, key) {
                                 var bestIdx = -1;
@@ -1785,6 +2105,43 @@ async def index() -> HTMLResponse:
                             resultBox.classList.add('result-ok');
                             resultBox.classList.add('has-result');
                             resultBox.innerHTML = html;
+
+                            if (!shouldDownload) {
+                                return null;
+                            }
+
+                            var fdExcel = new FormData(calcForm);
+                            fdExcel.set('mode', 'excel');
+                            fdExcel.set('scope', 'beton');
+                            fdExcel.set('profile_name', mainProfileSelect ? mainProfileSelect.value : '__base__');
+                            return fetch('/upload', { method: 'POST', body: fdExcel }).then(function(res) {
+                                if (!res.ok) {
+                                    return res.text().then(function(t) {
+                                        throw new Error(t || 'Ошибка сервера при формировании Excel');
+                                    });
+                                }
+                                return res.blob().then(function(blob) {
+                                    var fileName = 'raschet_po_ostatkam.xlsx';
+                                    var disp = null;
+                                    try {
+                                        disp = res.headers ? res.headers.get('Content-Disposition') : null;
+                                    } catch (e) {}
+                                    if (disp) {
+                                        var m = /filename=\"?([^\";]+)\"?/i.exec(disp);
+                                        if (m) fileName = m[1];
+                                    }
+                                    var url = window.URL.createObjectURL(blob);
+                                    var a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = fileName;
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    setTimeout(function() {
+                                        document.body.removeChild(a);
+                                        window.URL.revokeObjectURL(url);
+                                    }, 0);
+                                });
+                            });
                         })
                         .catch(function(err) {
                             resultBox.classList.remove('result-ok');
@@ -1795,35 +2152,99 @@ async def index() -> HTMLResponse:
                                 '</div>';
                         })
                         .finally(function() {
-                            if (btn) {
-                                btn.disabled = false;
-                                btn.textContent = 'Загрузить и посчитать';
-                            }
+                            calcOnlyBtn.disabled = false;
+                            downloadBtn.disabled = false;
+                            calcOnlyBtn.textContent = 'Посчитать';
+                            downloadBtn.textContent = 'Скачать';
                         });
+                }
+
+                calcOnlyBtn.addEventListener('click', function() {
+                    runBetonCalculation(false);
+                });
+                downloadBtn.addEventListener('click', function() {
+                    runBetonCalculation(true);
                 });
             }
 
-            if (jbiForm && resultBox) {
-                jbiForm.addEventListener('submit', function(e) {
-                    e.preventDefault();
+            if (jbiForm && resultBox && jbiCalcOnlyBtn && jbiDownloadBtn) {
+                function runJbiCalculation(shouldDownload) {
                     var jbiFileInput = document.getElementById('jbiFile');
                     if (!jbiFileInput || !jbiFileInput.files || !jbiFileInput.files[0]) {
                         alert('Выберите файл .xlsx');
                         return;
                     }
-                    var jbiProfileLabel = 'По умолчанию';
-                    if (jbiProfileSelect) {
-                        var selected = jbiProfileSelect.options[jbiProfileSelect.selectedIndex];
-                        jbiProfileLabel = selected ? selected.textContent || selected.value : jbiProfileSelect.value;
-                    }
+                    jbiCalcOnlyBtn.disabled = true;
+                    jbiDownloadBtn.disabled = true;
+                    jbiCalcOnlyBtn.textContent = shouldDownload ? 'Посчитать' : 'Считаем...';
+                    jbiDownloadBtn.textContent = shouldDownload ? 'Скачиваем...' : 'Скачать';
                     resultBox.classList.remove('result-ok');
                     resultBox.classList.remove('result-empty');
-                    resultBox.classList.add('has-result');
-                    resultBox.innerHTML =
-                        '<div class="result-title">Расчет ЖБИ</div>' +
-                        '<div class="result-meta">Файл: <strong>' + escapeHtml(jbiFileInput.files[0].name) + '</strong></div>' +
-                        '<div class="result-meta">Настройки: <strong>' + escapeHtml(jbiProfileLabel) + '</strong></div>' +
-                        '<div class="result-meta">Логика расчета ЖБИ будет добавлена следующим этапом.</div>';
+                    resultBox.classList.remove('has-result');
+                    resultBox.innerHTML = '<div class="result-title">Результат расчета</div><div class="result-meta">Выполняется расчет ЖБИ, подождите...</div>';
+
+                    var fdJbi = new FormData(jbiForm);
+                    fdJbi.set('mode', 'summary');
+                    fdJbi.set('scope', 'jbi');
+                    fdJbi.set('profile_name', jbiProfileSelect ? jbiProfileSelect.value : '__base__');
+
+                    fetch('/upload', { method: 'POST', body: fdJbi })
+                        .then(function(res) {
+                            if (!res.ok) {
+                                return res.text().then(function(t) {
+                                    throw new Error(t || 'Ошибка расчета ЖБИ');
+                                });
+                            }
+                            return res.json();
+                        })
+                        .then(function(summary) {
+                            var items = summary.items || [];
+                            var html = '';
+
+                            function fmtMoney(v) {
+                                return v != null && !isNaN(v) ? formatNumber(v, 2) + ' ₽' : '—';
+                            }
+
+                            if (items.length) {
+                                html += '<div class="result-table-card">';
+                                html += '<div class="result-section-title">Расчет ЖБИ</div>';
+                                html += '<div class="result-section-subtitle">Максимум изделий и итоговая стоимость</div>';
+                                html += '<div class="result-table-wrap"><table class="result-table">';
+                                html += '<thead><tr><th>Наименование изделия</th><th class="result-num">Максимум, шт</th><th class="result-num">Цена за 1 шт</th><th class="result-num">Общая цена</th></tr></thead><tbody>';
+                                for (var i = 0; i < items.length; i++) {
+                                    html += '<tr><td><span class="result-name">' + escapeHtml(items[i].name || '') + '</span></td><td class="result-num">' + String(items[i].max_units != null ? items[i].max_units : 0) + '</td><td class="result-num">' + fmtMoney(items[i].unit_price) + '</td><td class="result-num">' + fmtMoney(items[i].total_price) + '</td></tr>';
+                                }
+                                html += '</tbody></table></div></div>';
+                            } else {
+                                html += '<div class="result-meta">Данные по ЖБИ отсутствуют.</div>';
+                            }
+
+                            resultBox.classList.add('result-ok');
+                            resultBox.classList.add('has-result');
+                            resultBox.innerHTML = html;
+                            return null;
+                        })
+                        .catch(function(err) {
+                            resultBox.classList.remove('result-ok');
+                            resultBox.classList.remove('has-result');
+                            resultBox.innerHTML =
+                                '<div class="result-title">Ошибка расчета</div><div class="result-meta">' +
+                                escapeHtml(err && err.message ? err.message : String(err)) +
+                                '</div>';
+                        })
+                        .finally(function() {
+                            jbiCalcOnlyBtn.disabled = false;
+                            jbiDownloadBtn.disabled = false;
+                            jbiCalcOnlyBtn.textContent = 'Посчитать';
+                            jbiDownloadBtn.textContent = 'Скачать';
+                        });
+                }
+
+                jbiCalcOnlyBtn.addEventListener('click', function() {
+                    runJbiCalculation(false);
+                });
+                jbiDownloadBtn.addEventListener('click', function() {
+                    runJbiCalculation(true);
                 });
             }
         });
@@ -1840,9 +2261,14 @@ async def upload(
     file: UploadFile = File(...),
     website: str = Form(""),
     mode: str = Form("excel"),
+    scope: str = Form(CONFIG_SCOPE_BETON),
+    profile_name: str = Form("__base__"),
 ):
     if website:
         raise HTTPException(status_code=400, detail="Spam detected")
+
+    scope = _validate_scope(scope)
+    selected_profile = None if profile_name == "__base__" else profile_name
 
     ip = _client_ip(request)
     # лимитируем только "тяжелую" выдачу Excel, чтобы не блокировать
@@ -1853,7 +2279,8 @@ async def upload(
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Поддерживаются только файлы Excel .xlsx.")
 
-    materials = _load_materials()
+    materials = _load_materials(scope=scope, profile_name=selected_profile)
+    beton_materials = _load_materials(scope=CONFIG_SCOPE_BETON)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -1866,11 +2293,24 @@ async def upload(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Ошибка чтения файла: {exc}") from exc
 
+        beton_balances: dict[str, float] = {}
+        if scope == CONFIG_SCOPE_JBI:
+            try:
+                beton_balances = extract_balances(str(input_path), beton_materials)
+            except Exception:
+                beton_balances = {}
+
     if mode == "summary":
-        summary = _build_summary(balances)
+        if scope == CONFIG_SCOPE_JBI:
+            summary = _build_jbi_summary({**balances, **beton_balances}, profile_name=selected_profile)
+            return JSONResponse(content=summary)
+        summary = _build_summary(balances, scope=scope, profile_name=selected_profile)
         return JSONResponse(content=summary)
 
-    excel_bytes = _build_excel(balances)
+    if scope == CONFIG_SCOPE_JBI:
+        raise HTTPException(status_code=400, detail="Excel для ЖБИ пока не реализован")
+
+    excel_bytes = _build_excel(balances, scope=scope, profile_name=selected_profile)
 
     return StreamingResponse(
         io.BytesIO(excel_bytes),
@@ -1884,19 +2324,30 @@ async def upload(
     )
 
 
+@app.get("/api/config/options")
+async def api_get_config_options(scope: str = CONFIG_SCOPE_BETON) -> Dict[str, Any]:
+    scope = _validate_scope(scope)
+    profiles = _load_profiles(scope)
+    active_name: Optional[str] = profiles.get("active")
+    return {
+        "profiles": [{"name": p.get("name", "")} for p in profiles.get("profiles", [])],
+        "active_profile": active_name or "__base__",
+        "scope": scope,
+    }
+
+
 @app.get("/api/config")
-async def api_get_config() -> Dict[str, Any]:
-    profiles = _load_profiles()
+async def api_get_config(request: Request, scope: str = CONFIG_SCOPE_BETON) -> Dict[str, Any]:
+    _require_config_password(request)
+    scope = _validate_scope(scope)
+    profiles = _load_profiles(scope)
     active_name: Optional[str] = profiles.get("active")
     active_profile = _get_profile(profiles, active_name)
 
-    base_materials = load_materials_config()
-    base_recipes = load_recipes_config()
-    base_prices = load_prices_config()
-
-    materials = active_profile.get("materials") if active_profile and "materials" in active_profile else base_materials
-    recipes = active_profile.get("recipes") if active_profile and "recipes" in active_profile else base_recipes
-    prices = active_profile.get("prices") if active_profile and "prices" in active_profile else base_prices
+    base = _default_config_payload(scope)
+    materials = active_profile.get("materials") if active_profile and "materials" in active_profile else base["materials"]
+    recipes = active_profile.get("recipes") if active_profile and "recipes" in active_profile else base["recipes"]
+    prices = active_profile.get("prices") if active_profile and "prices" in active_profile else base["prices"]
 
     return {
         "materials": materials,
@@ -1904,16 +2355,22 @@ async def api_get_config() -> Dict[str, Any]:
         "prices": prices,
         "profiles": [{"name": p.get("name", "")} for p in profiles.get("profiles", [])],
         "active_profile": active_name or "__base__",
+        "scope": scope,
+        "external_materials": [r.name for r in _load_recipes(scope=CONFIG_SCOPE_BETON)] if scope == CONFIG_SCOPE_JBI else [],
     }
 
 
 @app.post("/api/config/profile")
-async def api_save_profile(payload: Dict[str, Any] = Body(...)) -> Dict[str, str]:
+async def api_save_profile(
+    request: Request, payload: Dict[str, Any] = Body(...)
+) -> Dict[str, str]:
+    _require_config_password(request)
+    scope = _validate_scope(payload.get("scope"))
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Имя профиля обязательно")
 
-    profiles = _load_profiles()
+    profiles = _load_profiles(scope)
     prof_list = profiles.get("profiles", [])
 
     new_profile = {
@@ -1934,38 +2391,46 @@ async def api_save_profile(payload: Dict[str, Any] = Body(...)) -> Dict[str, str
 
     profiles["profiles"] = prof_list
     profiles["active"] = name
-    _save_profiles(profiles)
+    _save_profiles(profiles, scope)
     return {"status": "ok"}
 
 
 @app.post("/api/config/profile/select")
-async def api_select_profile(payload: Dict[str, Any] = Body(...)) -> Dict[str, str]:
+async def api_select_profile(
+    request: Request, payload: Dict[str, Any] = Body(...)
+) -> Dict[str, str]:
+    _require_config_password(request)
+    scope = _validate_scope(payload.get("scope"))
     name = (payload.get("name") or "").strip()
 
-    profiles = _load_profiles()
+    profiles = _load_profiles(scope)
     if name == "__base__" or not name:
         profiles["active"] = None
-        _save_profiles(profiles)
+        _save_profiles(profiles, scope)
         return {"status": "ok"}
 
     if not _get_profile(profiles, name):
         raise HTTPException(status_code=404, detail="Профиль не найден")
 
     profiles["active"] = name
-    _save_profiles(profiles)
+    _save_profiles(profiles, scope)
     return {"status": "ok"}
 
 
 @app.delete("/api/config/profile/{name}")
-async def api_delete_profile(name: str) -> Dict[str, str]:
+async def api_delete_profile(
+    name: str, request: Request, scope: str = CONFIG_SCOPE_BETON
+) -> Dict[str, str]:
+    _require_config_password(request)
+    scope = _validate_scope(scope)
     if name == "__base__":
         raise HTTPException(status_code=400, detail="Базовый профиль удалить нельзя")
-    profiles = _load_profiles()
+    profiles = _load_profiles(scope)
     prof_list = profiles.get("profiles", [])
     prof_list = [p for p in prof_list if p.get("name") != name]
     profiles["profiles"] = prof_list
     if profiles.get("active") == name:
         profiles["active"] = None
-    _save_profiles(profiles)
+    _save_profiles(profiles, scope)
     return {"status": "ok"}
 
