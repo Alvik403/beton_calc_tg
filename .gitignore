@@ -1,10 +1,46 @@
+# Environment and secrets (never commit real tokens)
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+secrets/
+credentials.json
+.aws/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# IDE / OS
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and temp
 *.log
 *.tmp
+
+# Uploads and generated Excel from runs
 *.xlsx
+
+# Celery / async job artifacts
+jobs/
+celerybeat-schedule
+celerybeat.pid
+*.pid
+
+# Local Docker overrides (may contain env paths or secrets)
+docker-compose.override.yml
+docker-compose.*.local.yml
+
+# Web UI profiles saved on disk (recipes/prices per profile — business data)
+config/web_profiles.json
+config/web_profiles_jbi.json
