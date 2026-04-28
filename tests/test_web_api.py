@@ -145,6 +145,10 @@ def test_upload_supports_beton_summary_excel_and_jbi_summary(make_workbook, clie
     beton_item = next(item for item in summary_body["items"] if item["name"] == "БСТ B7,5 F50 W2")
     assert beton_item["limiters"]
     assert beton_item["limiters"][0]["material"] == "Песок средний Мк=2,0-2,5 класс 1"
+    assert "recipe_materials" in beton_item
+    assert len(beton_item["recipe_materials"]) >= len(beton_item["limiters"])
+    mat_names = {row["material"] for row in beton_item["recipe_materials"]}
+    assert "Песок средний Мк=2,0-2,5 класс 1" in mat_names
 
     web_module._last_request_per_ip.clear()
     excel_response = client.post(

@@ -37,8 +37,8 @@ services:
       - .env
     command: uvicorn app.web:app --host 0.0.0.0 --port 8000
     ports:
-      # снаружи 8080, внутри контейнера 8000 (если 8080 занят — поменяйте левую часть)
-      - "8080:8000"
+      # Порт хоста: BETON_WEB_PORT в .env или по умолчанию 8081 (8080 часто занят другими контейнерами)
+      - "${BETON_WEB_PORT:-8081}:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
     volumes:

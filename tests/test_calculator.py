@@ -65,7 +65,7 @@ def test_calculate_recipe_diagnostics_returns_limiting_materials():
         },
     )
 
-    max_m3, required, limiters = calculate_recipe_diagnostics(
+    max_m3, required, limiters, all_diag = calculate_recipe_diagnostics(
         recipe,
         {
             "cement": 1000,
@@ -80,4 +80,6 @@ def test_calculate_recipe_diagnostics_returns_limiting_materials():
     assert limiters[0]["material"] == "sand"
     assert limiters[0]["available"] == Decimal("3000.0")
     assert limiters[0]["required_per_unit"] == Decimal("900")
+    assert len(all_diag) == 3
+    assert {d["material"] for d in all_diag} == {"cement", "sand", "gravel"}
 

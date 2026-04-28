@@ -13,7 +13,7 @@ class Recipe:
 
 def calculate_recipe_diagnostics(
     recipe: Recipe, balances: dict[str, float]
-) -> tuple[Decimal, dict[str, Decimal], list[dict[str, Any]]]:
+) -> tuple[Decimal, dict[str, Decimal], list[dict[str, Any]], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     limits = []
     for material, per_m3 in recipe.materials.items():
@@ -32,19 +32,19 @@ def calculate_recipe_diagnostics(
         )
         limits.append(possible_output)
     if not limits:
-        return Decimal("0"), {}, []
+        return Decimal("0"), {}, [], []
     max_m3 = min(limits)
     required = {m: max_m3 * Decimal(str(v)) for m, v in recipe.materials.items()}
     limiters = [
         item for item in diagnostics if item.get("possible_output") == max_m3
     ]
-    return max_m3, required, limiters
+    return max_m3, required, limiters, diagnostics
 
 
 def calculate_max_cubic_meters(
     recipe: Recipe, balances: dict[str, float]
 ) -> tuple[Decimal, dict[str, Decimal]]:
-    max_m3, required, _ = calculate_recipe_diagnostics(recipe, balances)
+    max_m3, required, _, _ = calculate_recipe_diagnostics(recipe, balances)
     return max_m3, required
 
 

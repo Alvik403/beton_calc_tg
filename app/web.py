@@ -544,7 +544,9 @@ def _build_excel_first_table_jbi(
     rows: list[dict[str, Any]] = []
     merge_ranges: list[tuple[int, int]] = []
     for recipe in jbi_recipes:
-        max_units_raw, required, _ = calculate_recipe_diagnostics(recipe, effective_balances)
+        max_units_raw, required, _, _ = calculate_recipe_diagnostics(
+            recipe, effective_balances
+        )
         max_units = int(max_units_raw.to_integral_value(rounding=ROUND_FLOOR))
         mat_rows: list[tuple[str, Decimal]] = []
         for material in sorted(recipe.materials.keys()):
@@ -663,7 +665,9 @@ def _build_jbi_prices_dataframe(
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for recipe in jbi_recipes:
-        max_units_raw, _, _ = calculate_recipe_diagnostics(recipe, effective_balances)
+        max_units_raw, _, _, _ = calculate_recipe_diagnostics(
+            recipe, effective_balances
+        )
         max_units = int(max_units_raw.to_integral_value(rounding=ROUND_FLOOR))
         price = prices.get(_normalize_name(recipe.name), {})
         pdu = float(price.get("no_delivery_no_vat", 0.0) or 0.0)
@@ -1009,8 +1013,9 @@ def _build_summary(
         total_volume += max_m3
         recipe = next((item for item in recipes if item.name == name), None)
         limiter_data = []
+        recipe_materials: list[Dict[str, Any]] = []
         if recipe is not None:
-            _, _, limiters = calculate_recipe_diagnostics(recipe, balances)
+            _, _, limiters, all_diag = calculate_recipe_diagnostics(recipe, balances)
             limiter_data = [
                 {
                     "material": limiter["material"],
@@ -1019,6 +1024,15 @@ def _build_summary(
                     "possible_output": float(limiter["possible_output"]),
                 }
                 for limiter in limiters
+            ]
+            recipe_materials = [
+                {
+                    "material": d["material"],
+                    "available": float(d["available"]),
+                    "required_per_unit": float(d["required_per_unit"]),
+                    "possible_output": float(d["possible_output"]),
+                }
+                for d in all_diag
             ]
 
         def _val(col: str) -> Optional[float]:
@@ -1047,6 +1061,7 @@ def _build_summary(
                     "pickup_vat_22": _val(r4),
                 },
                 "limiters": limiter_data,
+                "recipe_materials": recipe_materials,
             }
         )
 
@@ -1068,7 +1083,9 @@ def _build_jbi_summary(
 
     items: list[Dict[str, Any]] = []
     for recipe in jbi_recipes:
-        max_units_raw, _, limiters = calculate_recipe_diagnostics(recipe, effective_balances)
+        max_units_raw, _, limiters, _ = calculate_recipe_diagnostics(
+            recipe, effective_balances
+        )
         max_units = int(max_units_raw.to_integral_value(rounding=ROUND_FLOOR))
         price = jbi_prices.get(_normalize_name(recipe.name), {})
         unit_price = float(price.get("no_delivery_no_vat", 0.0) or 0.0)
@@ -1848,12 +1865,319 @@ async def index() -> HTMLResponse:
                 box-shadow: inset 0 0 0 1px #fecdd3;
             }
             .chart-preview {
-                margin-top: 22px;
-                padding-top: 18px;
-                border-top: 1px solid #c7dcf5;
+                margin-top: 20px;
+                padding: 16px 16px 14px;
+                border: 1px solid #cfe1f7;
+                border-radius: 14px;
+                background: linear-gradient(180deg, #f8fafc 0%, #ffffff 55%);
+                box-shadow: 0 10px 28px rgba(33, 93, 168, 0.07);
             }
             .chart-preview-head {
+                margin-bottom: 12px;
+            }
+            .chart-stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+                gap: 10px;
+                margin-bottom: 12px;
+            }
+            .chart-stat {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                padding: 10px 11px;
+                min-height: 72px;
+                box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+            }
+            .chart-stat-risk {
+                border-color: #fecaca;
+                background: linear-gradient(180deg, #fffafa 0%, #ffffff 100%);
+            }
+            .chart-stat-label {
+                font-size: 10px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #64748b;
+                font-weight: 700;
+            }
+            .chart-stat-value {
+                font-size: 17px;
+                font-weight: 700;
+                color: #0f172a;
+                margin-top: 5px;
+                line-height: 1.25;
+                word-break: break-word;
+            }
+            .chart-stat-note {
+                font-size: 11px;
+                color: #94a3b8;
+                margin-top: 4px;
+                line-height: 1.3;
+            }
+            .chart-def-legend {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 10px 16px;
+                font-size: 11px;
+                color: #64748b;
+                margin: 0 0 12px;
+                padding: 8px 10px;
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            .chart-lg {
+                display: inline-block;
+                width: 12px;
+                height: 12px;
+                border-radius: 3px;
+                vertical-align: middle;
+                margin-right: 4px;
+            }
+            .chart-lg.sw.ok { background: rgba(22, 163, 74, 0.85); }
+            .chart-lg.sw.mid { background: rgba(217, 119, 6, 0.85); }
+            .chart-lg.sw.bad { background: rgba(220, 38, 38, 0.85); }
+            .beton-analytics-strip {
                 margin-bottom: 14px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .beton-leader-block {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: baseline;
+                gap: 8px 14px;
+                padding: 12px 14px;
+                background: #fff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+            }
+            .beton-leader-k {
+                font-size: 10px;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: #64748b;
+                font-weight: 700;
+            }
+            .beton-leader-name {
+                font-weight: 700;
+                color: #0f172a;
+                flex: 1;
+                min-width: 140px;
+            }
+            .beton-leader-meta {
+                font-size: 13px;
+                color: #475569;
+            }
+            .beton-def-top3-label {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: #64748b;
+            }
+            .beton-def-details {
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                background: #fff;
+                overflow: hidden;
+            }
+            .beton-def-summary {
+                list-style: none;
+                cursor: pointer;
+                padding: 10px 12px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                font-size: 13px;
+                user-select: none;
+            }
+            .beton-def-summary::-webkit-details-marker { display: none; }
+            .beton-def-summary-left {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                min-width: 0;
+            }
+            .beton-def-rank {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 22px;
+                height: 22px;
+                border-radius: 6px;
+                background: #f1f5f9;
+                font-size: 12px;
+                font-weight: 800;
+                color: #475569;
+            }
+            .beton-def-name {
+                font-weight: 600;
+                color: #1e293b;
+                word-break: break-word;
+            }
+            .beton-def-summary-right {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-shrink: 0;
+            }
+            .beton-def-pct {
+                font-weight: 700;
+                font-variant-numeric: tabular-nums;
+                color: #b45309;
+            }
+            .beton-def-details[open] .beton-def-pct { color: #c2410c; }
+            .beton-def-chev {
+                font-size: 10px;
+                color: #94a3b8;
+                transition: transform 0.15s ease;
+            }
+            .beton-def-details[open] .beton-def-chev { transform: rotate(-180deg); }
+            .beton-mat-panel-inner {
+                padding: 0 12px 12px 44px;
+                border-top: 1px solid #f1f5f9;
+            }
+            .beton-mat-name {
+                color: #334155;
+                word-break: break-word;
+            }
+            .beton-mat-empty {
+                margin: 10px 0 0;
+                font-size: 12px;
+                color: #94a3b8;
+            }
+            .beton-mat-table-wrap {
+                overflow-x: auto;
+                margin-top: 4px;
+                border-radius: 8px;
+                border: 1px solid #e8eef4;
+            }
+            .beton-mat-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+                background: #fff;
+            }
+            .beton-mat-table th,
+            .beton-mat-table td {
+                padding: 8px 10px;
+                text-align: left;
+                border-bottom: 1px solid #f1f5f9;
+            }
+            .beton-mat-table th {
+                font-size: 10px;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: #64748b;
+                font-weight: 700;
+                background: #f8fafc;
+            }
+            .beton-mat-table tr:last-child td { border-bottom: none; }
+            .beton-mat-table .num {
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+            }
+            .beton-target-calc {
+                margin-top: 14px;
+                padding-top: 12px;
+                border-top: 1px solid #e8eef4;
+            }
+            .beton-max-now {
+                font-size: 13px;
+                color: #334155;
+                margin: 0 0 12px;
+                line-height: 1.45;
+            }
+            .beton-max-now strong {
+                color: #0f172a;
+                font-weight: 700;
+            }
+            .beton-target-row {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 10px;
+                margin-bottom: 8px;
+            }
+            .beton-target-label {
+                font-size: 12px;
+                font-weight: 600;
+                color: #334155;
+            }
+            .beton-target-input {
+                padding: 7px 11px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                min-width: 130px;
+                font-size: 13px;
+            }
+            .beton-target-btn {
+                padding: 7px 14px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #fff;
+                background: #2563eb;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+            }
+            .beton-target-btn:hover { background: #1d4ed8; }
+            .beton-target-out { margin-top: 10px; }
+            .beton-target-hint {
+                font-size: 11px;
+                color: #94a3b8;
+                margin: 10px 0 0;
+                line-height: 1.4;
+            }
+            .beton-target-ok {
+                font-size: 13px;
+                color: #166534;
+                margin: 0;
+                line-height: 1.4;
+            }
+            .beton-target-warn { color: #b91c1c; font-size: 13px; }
+            .beton-extra-head {
+                font-size: 12px;
+                font-weight: 700;
+                margin: 0 0 8px;
+                color: #0f172a;
+            }
+            .beton-extra-list {
+                list-style: none;
+                margin: 0;
+                padding: 0;
+            }
+            .beton-extra-list li {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 12px;
+                padding: 8px 10px;
+                margin-top: 6px;
+                background: #fff7ed;
+                border-radius: 8px;
+                border: 1px solid #fed7aa;
+                font-size: 13px;
+            }
+            .beton-extra-list li:first-child { margin-top: 0; }
+            .beton-extra-qty {
+                font-weight: 700;
+                color: #c2410c;
+                font-variant-numeric: tabular-nums;
+                flex-shrink: 0;
+            }
+            .chart-preview-foot {
+                font-size: 11px;
+                color: #64748b;
+                line-height: 1.45;
+                margin-top: 10px;
+                padding-top: 10px;
+                border-top: 1px dashed #cbd5e1;
             }
             .chart-preview-title {
                 font-size: 15px;
@@ -1865,6 +2189,7 @@ async def index() -> HTMLResponse:
                 font-size: 12px;
                 color: #64748b;
                 line-height: 1.45;
+                max-width: 920px;
             }
             .chart-preview-grid {
                 display: grid;
@@ -1875,23 +2200,58 @@ async def index() -> HTMLResponse:
                 .chart-preview-grid {
                     grid-template-columns: 1fr 1fr;
                 }
+                .chart-preview-span {
+                    grid-column: 1 / -1;
+                }
+            }
+            .chart-preview-separate-block {
+                margin-top: 18px;
+                padding-top: 16px;
+                border-top: 1px dashed #cbd5e1;
             }
             .chart-preview-card {
-                background: linear-gradient(165deg, #f8fbff 0%, #ffffff 55%);
+                background:
+                    radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 36%),
+                    linear-gradient(165deg, #f8fbff 0%, #ffffff 58%);
                 border: 1px solid #d7e6f8;
                 border-radius: 12px;
-                padding: 12px 12px 8px;
+                padding: 13px 13px 10px;
                 box-shadow: 0 8px 24px rgba(33, 93, 168, 0.06);
+            }
+            .chart-preview-card.danger {
+                background:
+                    radial-gradient(circle at top right, rgba(248, 113, 113, 0.12), transparent 36%),
+                    linear-gradient(165deg, #fffafa 0%, #ffffff 62%);
+                border-color: #ffd4d4;
             }
             .chart-preview-cap {
                 font-size: 12px;
                 font-weight: 600;
                 color: #184a8b;
+                margin-bottom: 3px;
+            }
+            .chart-preview-sub {
+                font-size: 11px;
+                color: #64748b;
                 margin-bottom: 8px;
             }
             .chart-preview-canvas {
                 position: relative;
-                height: 240px;
+                height: 260px;
+                cursor: grab;
+                touch-action: none;
+            }
+            .chart-preview-canvas:active {
+                cursor: grabbing;
+            }
+            .chart-preview-canvas.tall {
+                height: 310px;
+            }
+            .chart-preview-hint-tools {
+                font-size: 11px;
+                color: #64748b;
+                margin-top: 6px;
+                line-height: 1.45;
             }
         </style>
     </head>
@@ -2090,8 +2450,16 @@ async def index() -> HTMLResponse:
             </div>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js" crossorigin="anonymous"></script>
         <script>
         document.addEventListener('DOMContentLoaded', function() {
+            if (typeof Chart !== 'undefined' && window.ChartZoom) {
+                try {
+                    Chart.register(window.ChartZoom);
+                } catch (eZoomReg) {}
+            }
+
             var cfgBtn = document.getElementById('cfgBtn');
             var jbiCfgBtn = document.getElementById('jbiCfgBtn');
             var cfgPanel = document.getElementById('cfgPanel');
@@ -2868,68 +3236,318 @@ async def index() -> HTMLResponse:
                 }
                 __previewChartInstances.length = 0;
             }
+            function getZoomPanPlugins() {
+                if (typeof Chart === 'undefined' || !window.ChartZoom) {
+                    return {};
+                }
+                return {
+                    zoom: {
+                        zoom: {
+                            wheel: { enabled: true, speed: 0.11 },
+                            pinch: { enabled: true },
+                            mode: 'xy',
+                        },
+                        pan: {
+                            enabled: true,
+                            mode: 'xy',
+                        },
+                    },
+                };
+            }
+            function withZoomPlugins(base) {
+                return Object.assign({}, base || {}, getZoomPanPlugins());
+            }
+            function bindChartInteractions(canvas, chart) {
+                if (!canvas || !chart || typeof chart.resetZoom !== 'function') {
+                    return;
+                }
+                canvas.addEventListener('dblclick', function(evt) {
+                    if (evt) evt.preventDefault();
+                    chart.resetZoom();
+                });
+            }
             function shortChartLabel(s, maxLen) {
                 s = String(s || '');
                 if (s.length <= maxLen) return s;
                 return s.slice(0, maxLen - 1) + '…';
+            }
+            function numberOrZero(v) {
+                var n = Number(v);
+                return isNaN(n) ? 0 : n;
+            }
+            function topItemsBy(items, key, limit) {
+                var copy = (items || []).slice();
+                copy.sort(function(a, b) {
+                    return numberOrZero(b[key]) - numberOrZero(a[key]);
+                });
+                return copy.slice(0, limit);
+            }
+            function pickBottleneck(item) {
+                var limiters = item && item.limiters ? item.limiters : [];
+                if (!limiters.length) return null;
+                var best = limiters[0];
+                for (var i = 1; i < limiters.length; i++) {
+                    if (numberOrZero(limiters[i].possible_output) < numberOrZero(best.possible_output)) {
+                        best = limiters[i];
+                    }
+                }
+                return best;
+            }
+            function deficitScore(value, maxValue) {
+                value = numberOrZero(value);
+                maxValue = numberOrZero(maxValue);
+                if (maxValue <= 0) return 100;
+                if (value <= 0) return 100;
+                return Math.max(0, Math.min(100, 100 - (value / maxValue) * 100));
+            }
+            function deficitColor(score) {
+                score = Math.max(0, Math.min(100, numberOrZero(score)));
+                if (score >= 70) return 'rgba(220, 38, 38, 0.82)';
+                if (score >= 40) return 'rgba(217, 119, 6, 0.82)';
+                return 'rgba(22, 163, 74, 0.78)';
+            }
+            function b64EncodeRecipeMaterials(arr) {
+                try {
+                    var raw = JSON.stringify(arr || []);
+                    if (typeof btoa !== 'undefined') {
+                        return btoa(unescape(encodeURIComponent(raw)));
+                    }
+                } catch (eB64) {}
+                return '';
+            }
+            function buildBetonRecipeMaterialsTable(mats) {
+                var m = mats || [];
+                if (!m.length) {
+                    return '<p class="beton-mat-empty">Нет состава в профиле для этой марки</p>';
+                }
+                var u = '<div class="beton-mat-table-wrap"><table class="beton-mat-table"><thead><tr>';
+                u += '<th>Материал</th><th class="num">Остаток</th><th class="num">На 1 м³</th><th class="num">Макс. м³</th>';
+                u += '</tr></thead><tbody>';
+                for (var ri = 0; ri < m.length; ri++) {
+                    var L = m[ri];
+                    var mat = escapeHtml(String(L.material || ''));
+                    u += '<tr><td>' + mat + '</td>';
+                    u += '<td class="num">' + formatNumber(numberOrZero(L.available), 3) + '</td>';
+                    u += '<td class="num">' + formatNumber(numberOrZero(L.required_per_unit), 3) + '</td>';
+                    u += '<td class="num">' + formatNumber(numberOrZero(L.possible_output), 3) + '</td></tr>';
+                }
+                u += '</tbody></table></div>';
+                u += '<p class="beton-target-hint" style="margin-top:8px">Единицы как в рецепте профиля и в файле остатков (для бетона обычно кг). «Макс. м³» — сколько м³ даст только эта строка: остаток ÷ норма на м³.</p>';
+                return u;
+            }
+            function buildBetonAnalyticsHtml(items) {
+                if (!items || !items.length) return '';
+                var maxM3 = 0;
+                for (var i = 0; i < items.length; i++) {
+                    maxM3 = Math.max(maxM3, numberOrZero(items[i].max_m3));
+                }
+                var lead = topItemsBy(items, 'max_m3', 1)[0];
+                var leadName = lead ? escapeHtml(shortChartLabel(lead.name || '', 42)) : '—';
+                var leadVol = lead ? formatNumber(numberOrZero(lead.max_m3), 3) : '—';
+                var leadBn = lead ? pickBottleneck(lead) : null;
+                var leadLim = leadBn && leadBn.material ? escapeHtml(shortChartLabel(leadBn.material, 40)) : '—';
+                var scored = [];
+                for (var s = 0; s < items.length; s++) {
+                    var it0 = items[s];
+                    scored.push({
+                        item: it0,
+                        pct: Math.round(deficitScore(numberOrZero(it0.max_m3), maxM3))
+                    });
+                }
+                scored.sort(function(a, b) { return b.pct - a.pct; });
+                var top3 = scored.slice(0, 3);
+                var out = '';
+                out += '<div class="chart-preview">';
+                out += '<div class="beton-analytics-strip">';
+                out += '<div class="beton-leader-block">';
+                out += '<span class="beton-leader-k">Лидер</span>';
+                out += '<span class="beton-leader-name">' + leadName + '</span>';
+                out += '<span class="beton-leader-meta">' + leadVol + ' м³ · лимит: ' + leadLim + '</span>';
+                out += '</div>';
+                out += '<div class="beton-def-top3-label">Топ-3 по дефициту</div>';
+                for (var t = 0; t < top3.length; t++) {
+                    var row = top3[t];
+                    var it = row.item;
+                    var nm = escapeHtml(shortChartLabel(it.name || '', 48));
+                    var rm = it.recipe_materials || [];
+                    var matsB64 = b64EncodeRecipeMaterials(rm);
+                    var maxThis = formatNumber(numberOrZero(it.max_m3), 3);
+                    out += '<details class="beton-def-details" data-mats-b64="' + matsB64 + '">';
+                    out += '<summary class="beton-def-summary">';
+                    out += '<span class="beton-def-summary-left"><span class="beton-def-rank">' + String(t + 1) + '</span><span class="beton-def-name">' + nm + '</span></span>';
+                    out += '<span class="beton-def-summary-right"><span class="beton-def-pct">' + row.pct + '%</span><span class="beton-def-chev">▼</span></span>';
+                    out += '</summary>';
+                    out += '<div class="beton-mat-panel-inner">' + buildBetonRecipeMaterialsTable(rm) + '</div>';
+                    out += '<div class="beton-target-calc">';
+                    out += '<p class="beton-max-now">С текущими остатками по файлу можно произвести <strong>' + maxThis + ' м³</strong>.</p>';
+                    out += '<div class="beton-target-row"><span class="beton-target-label">Нужно произвести, м³</span>';
+                    out += '<input type="number" step="any" min="0" class="beton-target-input" placeholder="например 125" aria-label="Целевой объём бетона м³" /></div>';
+                    out += '<button type="button" class="beton-target-btn">Считать докупку по остаткам</button>';
+                    out += '<div class="beton-target-out" hidden="hidden"></div>';
+                    out += '</div>';
+                    out += '</details>';
+                }
+                out += '</div>';
+                out += '<div class="chart-preview-grid">';
+                out += '<div class="chart-preview-card chart-preview-span"><div class="chart-preview-cap">Цены по сценариям</div><div class="chart-preview-canvas tall"><canvas id="betonPreviewPrice"></canvas></div></div>';
+                out += '<div class="chart-preview-card"><div class="chart-preview-cap">Объёмы, м³</div><div class="chart-preview-canvas"><canvas id="betonPreviewVol"></canvas></div></div>';
+                out += '<div class="chart-preview-card danger"><div class="chart-preview-cap">Дефицит</div><div class="chart-preview-canvas"><canvas id="betonPreviewDeficit"></canvas></div></div>';
+                out += '</div>';
+                out += '<div class="chart-preview-separate-block">';
+                out += '<div class="chart-preview-card chart-preview-span">';
+                out += '<div class="chart-preview-cap">Цена и объём по маркам</div>';
+                out += '<div class="chart-preview-sub">Топ-12 по объёму: столбцы — max м³, красная линия — ₽/м³ (без доставки без НДС).</div>';
+                out += '<div class="chart-preview-canvas tall"><canvas id="betonPreviewPriceVolume"></canvas></div>';
+                out += '</div></div>';
+                out += '</div>';
+                return out;
+            }
+            function buildJbiAnalyticsHtml(items) {
+                if (!items || !items.length) return '';
+                var totalUnits = 0;
+                var sumMoney = 0;
+                var maxU = 0;
+                for (var i = 0; i < items.length; i++) {
+                    var u = numberOrZero(items[i].max_units);
+                    totalUnits += u;
+                    maxU = Math.max(maxU, u);
+                    sumMoney += numberOrZero(items[i].total_price);
+                }
+                var crit = 0;
+                var warn = 0;
+                var ok = 0;
+                for (var j = 0; j < items.length; j++) {
+                    var sc = deficitScore(numberOrZero(items[j].max_units), maxU);
+                    if (sc >= 70) crit++;
+                    else if (sc >= 40) warn++;
+                    else ok++;
+                }
+                var pLo = null;
+                var pHi = null;
+                for (var a = 0; a < items.length; a++) {
+                    var p = numberOrZero(items[a].unit_price);
+                    if (p <= 0) continue;
+                    if (pLo === null || p < pLo) pLo = p;
+                    if (pHi === null || p > pHi) pHi = p;
+                }
+                var lead = topItemsBy(items, 'max_units', 1)[0];
+                var leadName = lead ? escapeHtml(shortChartLabel(lead.name || '', 30)) : '—';
+                var leadU = lead ? String(Math.floor(numberOrZero(lead.max_units))) : '—';
+                var leadBn = lead ? pickBottleneck(lead) : null;
+                var leadLim = leadBn && leadBn.material ? escapeHtml(shortChartLabel(leadBn.material, 36)) : '—';
+                var priceRange = (pLo !== null && pHi !== null) ? (formatNumber(pLo, 2) + ' – ' + formatNumber(pHi, 2) + ' ₽/шт') : '—';
+                var out = '';
+                out += '<div class="chart-preview">';
+                out += '<div class="chart-preview-head">';
+                out += '<div class="chart-preview-title">Аналитика по загруженному файлу (ЖБИ)</div>';
+                out += '<div class="chart-preview-hint">Показатели по текущему расчёту. Дефицит — отставание выпуска изделия от лучшего по остаткам в этом файле.</div>';
+                out += '<div class="chart-preview-hint-tools">Масштаб: колёсико. Сдвиг: перетаскивание. Сброс: двойной щелчок по графику.</div>';
+                out += '</div>';
+                out += '<div class="chart-stats">';
+                out += '<div class="chart-stat"><div class="chart-stat-label">Сумма max шт</div><div class="chart-stat-value">' + String(Math.floor(totalUnits)) + ' шт</div><div class="chart-stat-note">' + items.length + ' изделий · max одного: ' + String(Math.floor(maxU)) + ' шт</div></div>';
+                out += '<div class="chart-stat"><div class="chart-stat-label">Лидер</div><div class="chart-stat-value">' + leadName + '</div><div class="chart-stat-note">' + leadU + ' шт · лимит: ' + leadLim + '</div></div>';
+                out += '<div class="chart-stat"><div class="chart-stat-label">Сумма ₽ (таблица)</div><div class="chart-stat-value">' + formatNumber(sumMoney, 2) + ' ₽</div><div class="chart-stat-note">Σ (цена × max шт)</div></div>';
+                out += '<div class="chart-stat chart-stat-risk"><div class="chart-stat-label">Складской риск</div><div class="chart-stat-value">' + crit + ' · ' + warn + ' · ' + ok + '</div><div class="chart-stat-note">критично · внимание · норма</div></div>';
+                out += '</div>';
+                out += '<div class="chart-def-legend"><span class="chart-lg sw ok"></span> дефицит &lt;40% &nbsp; <span class="chart-lg sw mid"></span> 40–70% &nbsp; <span class="chart-lg sw bad"></span> ≥70% &nbsp;· цены: ' + priceRange + '</div>';
+                out += '<div class="chart-preview-grid">';
+                out += '<div class="chart-preview-card"><div class="chart-preview-cap">Max изделий, шт</div><div class="chart-preview-sub">До 12 позиций с наибольшим выпуском.</div><div class="chart-preview-canvas"><canvas id="jbiPreviewVol"></canvas></div></div>';
+                out += '<div class="chart-preview-card"><div class="chart-preview-cap">Цена за 1 шт</div><div class="chart-preview-sub">Те же изделия, что и слева.</div><div class="chart-preview-canvas"><canvas id="jbiPreviewPrice"></canvas></div></div>';
+                out += '<div class="chart-preview-card danger chart-preview-span"><div class="chart-preview-cap">Индекс дефицита</div><div class="chart-preview-sub">Топ проблемных относительно лидера; в подсказке — лимитирующий ресурс.</div><div class="chart-preview-canvas"><canvas id="jbiPreviewDeficit"></canvas></div></div>';
+                out += '</div>';
+                out += '<div class="chart-preview-foot">Источник: текущий Excel и профиль ЖБИ. Временной динамики нет.</div>';
+                out += '</div>';
+                return out;
             }
             function initBetonPreviewCharts(items) {
                 if (typeof Chart === 'undefined' || !items || !items.length) return;
                 destroyPreviewCharts();
                 var elP = document.getElementById('betonPreviewPrice');
                 var elV = document.getElementById('betonPreviewVol');
-                if (!elP || !elV) return;
-                var labels = items.map(function(it) { return shortChartLabel(it.name || '', 26); });
+                var elD = document.getElementById('betonPreviewDeficit');
+                if (!elP || !elV || !elD) return;
+                var sortedByVolume = topItemsBy(items, 'max_m3', 12);
+                var labels = sortedByVolume.map(function(it) { return shortChartLabel(it.name || '', 26); });
                 var keys = ['no_delivery_no_vat', 'no_delivery_vat_22', 'pickup_no_vat', 'pickup_vat_22'];
                 var keyLabels = ['Без доставки без НДС', 'С НДС 22%', 'Самовывоз без НДС', 'Самовывоз НДС 22%'];
-                var palette = [
-                    'rgba(37, 99, 235, 0.82)',
-                    'rgba(8, 145, 178, 0.82)',
-                    'rgba(217, 119, 6, 0.82)',
-                    'rgba(185, 28, 28, 0.78)'
-                ];
-                var borderPalette = [
+                var linePalette = [
                     'rgb(37, 99, 235)',
                     'rgb(8, 145, 178)',
                     'rgb(217, 119, 6)',
-                    'rgb(185, 28, 28)'
+                    'rgb(124, 58, 237)',
+                    'rgb(22, 163, 74)',
+                    'rgb(220, 38, 38)',
+                    'rgb(15, 118, 110)',
+                    'rgb(180, 83, 9)'
                 ];
-                var ds = [];
-                for (var ki = 0; ki < keys.length; ki++) {
-                    var arr = [];
-                    for (var ri = 0; ri < items.length; ri++) {
-                        var up = (items[ri].unit_prices || {})[keys[ki]];
-                        arr.push(up != null && !isNaN(up) ? Number(up) : 0);
-                    }
-                    ds.push({
-                        label: keyLabels[ki],
-                        data: arr,
-                        backgroundColor: palette[ki],
-                        borderColor: borderPalette[ki],
-                        borderWidth: 1,
-                        borderRadius: 5
-                    });
-                }
                 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
                 Chart.defaults.color = '#475569';
+                var priceItems = topItemsBy(items, 'max_m3', 8);
+                var priceDatasets = [];
+                for (var pi = 0; pi < priceItems.length; pi++) {
+                    var priceItem = priceItems[pi];
+                    var series = [];
+                    for (var ki = 0; ki < keys.length; ki++) {
+                        series.push(numberOrZero((priceItem.unit_prices || {})[keys[ki]]));
+                    }
+                    priceDatasets.push({
+                        label: shortChartLabel(priceItem.name || '', 22),
+                        data: series,
+                        borderColor: linePalette[pi % linePalette.length],
+                        backgroundColor: linePalette[pi % linePalette.length],
+                        tension: 0.28,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                        borderWidth: 2
+                    });
+                }
                 var ch1 = new Chart(elP, {
-                    type: 'bar',
-                    data: { labels: labels, datasets: ds },
+                    type: 'line',
+                    data: { labels: keyLabels, datasets: priceDatasets },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: withZoomPlugins({
                             legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, padding: 10 } },
-                            title: { display: false }
-                        },
+                            tooltip: {
+                                callbacks: {
+                                    title: function(tooltipItems) {
+                                        if (!tooltipItems || !tooltipItems.length) return '';
+                                        return 'Сценарий: ' + keyLabels[tooltipItems[0].dataIndex];
+                                    },
+                                    label: function(ctx) {
+                                        return ctx.dataset.label + ': ' + formatNumber(ctx.parsed.y, 2) + ' ₽/м³';
+                                    },
+                                    afterBody: function(tooltipItems) {
+                                        if (!tooltipItems || !tooltipItems.length) return '';
+                                        var seen = {};
+                                        var lines = ['Макс. объём и лимит по марке:'];
+                                        for (var t = 0; t < tooltipItems.length; t++) {
+                                            var dsIx = tooltipItems[t].datasetIndex;
+                                            if (seen[dsIx]) continue;
+                                            seen[dsIx] = true;
+                                            var it = priceItems[dsIx];
+                                            if (!it) continue;
+                                            var bn = pickBottleneck(it);
+                                            var tail = formatNumber(numberOrZero(it.max_m3), 3) + ' м³';
+                                            if (bn && bn.material) tail += ' · ' + bn.material;
+                                            lines.push('• ' + shortChartLabel(it.name || '', 32) + ': ' + tail);
+                                        }
+                                        return lines.length > 1 ? lines : '';
+                                    }
+                                }
+                            }
+                        }),
                         scales: {
-                            x: { ticks: { maxRotation: 45, autoSkip: true } },
+                            x: { ticks: { maxRotation: 0, autoSkip: false } },
                             y: { beginAtZero: true, title: { display: true, text: '₽ / м³' } }
                         }
                     }
                 });
                 __previewChartInstances.push(ch1);
-                var vols = items.map(function(it) { return Number(it.max_m3) || 0; });
+                bindChartInteractions(elP, ch1);
+                var vols = sortedByVolume.map(function(it) { return numberOrZero(it.max_m3); });
                 var ch2 = new Chart(elV, {
                     type: 'bar',
                     data: {
@@ -2946,7 +3564,24 @@ async def index() -> HTMLResponse:
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
+                        plugins: withZoomPlugins({
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return 'Объём: ' + formatNumber(ctx.parsed.y, 3) + ' м³';
+                                    },
+                                    afterBody: function(tooltipItems) {
+                                        if (!tooltipItems || !tooltipItems.length) return '';
+                                        var ix = tooltipItems[0].dataIndex;
+                                        var it = sortedByVolume[ix];
+                                        if (!it) return '';
+                                        var bn = pickBottleneck(it);
+                                        return bn && bn.material ? 'Лимит: ' + bn.material : '';
+                                    }
+                                }
+                            }
+                        }),
                         scales: {
                             x: { ticks: { maxRotation: 45, autoSkip: true } },
                             y: { beginAtZero: true, title: { display: true, text: 'м³' } }
@@ -2954,17 +3589,150 @@ async def index() -> HTMLResponse:
                     }
                 });
                 __previewChartInstances.push(ch2);
+                bindChartInteractions(elV, ch2);
+                var maxM3 = 0;
+                for (var mi = 0; mi < items.length; mi++) {
+                    maxM3 = Math.max(maxM3, numberOrZero(items[mi].max_m3));
+                }
+                var deficitItems = items.slice().sort(function(a, b) {
+                    return deficitScore(numberOrZero(b.max_m3), maxM3) - deficitScore(numberOrZero(a.max_m3), maxM3);
+                }).slice(0, 12);
+                var deficitLabels = deficitItems.map(function(it) { return shortChartLabel(it.name || '', 26); });
+                var deficitValues = deficitItems.map(function(it) {
+                    return Math.round(deficitScore(numberOrZero(it.max_m3), maxM3));
+                });
+                var deficitColors = deficitValues.map(deficitColor);
+                var ch3 = new Chart(elD, {
+                    type: 'bar',
+                    data: {
+                        labels: deficitLabels,
+                        datasets: [{
+                            label: 'Уровень дефицита',
+                            data: deficitValues,
+                            backgroundColor: deficitColors,
+                            borderColor: 'rgba(51, 65, 85, 0.22)',
+                            borderWidth: 1,
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: withZoomPlugins({
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return 'Дефицит: ' + ctx.parsed.x + '%';
+                                    },
+                                    afterBody: function(ctx) {
+                                        if (!ctx || !ctx.length) return '';
+                                        var ix = ctx[0].dataIndex;
+                                        var bottleneck = pickBottleneck(deficitItems[ix]);
+                                        return bottleneck && bottleneck.material ? 'Лимит: ' + bottleneck.material : '';
+                                    }
+                                }
+                            }
+                        }),
+                        scales: {
+                            x: { min: 0, max: 100, title: { display: true, text: '% дефицита' } },
+                            y: { ticks: { autoSkip: false } }
+                        }
+                    }
+                });
+                __previewChartInstances.push(ch3);
+                bindChartInteractions(elD, ch3);
+                var elPV = document.getElementById('betonPreviewPriceVolume');
+                if (elPV) {
+                    var comboPrices = sortedByVolume.map(function(it) {
+                        return numberOrZero((it.unit_prices || {}).no_delivery_no_vat);
+                    });
+                    var chPv = new Chart(elPV, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                {
+                                    type: 'bar',
+                                    label: 'Объём, м³',
+                                    data: vols,
+                                    yAxisID: 'y',
+                                    order: 0,
+                                    backgroundColor: 'rgba(59, 130, 246, 0.55)',
+                                    borderColor: 'rgb(37, 99, 235)',
+                                    borderWidth: 1,
+                                    borderRadius: 5
+                                },
+                                {
+                                    type: 'line',
+                                    label: 'Цена ₽/м³ (без доставки без НДС)',
+                                    data: comboPrices,
+                                    yAxisID: 'y1',
+                                    order: 1,
+                                    borderColor: 'rgb(220, 38, 38)',
+                                    backgroundColor: 'rgba(220, 38, 38, 0.06)',
+                                    borderWidth: 2.5,
+                                    tension: 0.22,
+                                    pointRadius: 3,
+                                    pointHoverRadius: 5,
+                                    spanGaps: true
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: withZoomPlugins({
+                                legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, padding: 8 } },
+                                tooltip: {
+                                    callbacks: {
+                                        afterBody: function(tooltipItems) {
+                                            if (!tooltipItems || !tooltipItems.length) return '';
+                                            var ix = tooltipItems[0].dataIndex;
+                                            var it = sortedByVolume[ix];
+                                            if (!it) return '';
+                                            var bn = pickBottleneck(it);
+                                            return bn && bn.material ? 'Лимит: ' + bn.material : '';
+                                        }
+                                    }
+                                }
+                            }),
+                            scales: {
+                                x: { ticks: { maxRotation: 45, autoSkip: true } },
+                                y: {
+                                    type: 'linear',
+                                    position: 'left',
+                                    beginAtZero: true,
+                                    title: { display: true, text: 'м³' }
+                                },
+                                y1: {
+                                    type: 'linear',
+                                    position: 'right',
+                                    beginAtZero: true,
+                                    title: { display: true, text: '₽/м³' },
+                                    grid: { drawOnChartArea: false }
+                                }
+                            }
+                        }
+                    });
+                    __previewChartInstances.push(chPv);
+                    bindChartInteractions(elPV, chPv);
+                }
             }
             function initJbiPreviewCharts(items) {
                 if (typeof Chart === 'undefined' || !items || !items.length) return;
                 destroyPreviewCharts();
                 var elP = document.getElementById('jbiPreviewPrice');
                 var elV = document.getElementById('jbiPreviewVol');
-                if (!elP || !elV) return;
-                var labels = items.map(function(it) { return shortChartLabel(it.name || '', 26); });
+                var elD = document.getElementById('jbiPreviewDeficit');
+                if (!elP || !elV || !elD) return;
+                var sortedByUnits = topItemsBy(items, 'max_units', 12);
+                var labels = sortedByUnits.map(function(it) { return shortChartLabel(it.name || '', 26); });
                 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
                 Chart.defaults.color = '#475569';
-                var prices = items.map(function(it) { return Number(it.unit_price) || 0; });
+                var prices = sortedByUnits.map(function(it) { return numberOrZero(it.unit_price); });
                 var ch1 = new Chart(elP, {
                     type: 'bar',
                     data: {
@@ -2981,7 +3749,26 @@ async def index() -> HTMLResponse:
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
+                        plugins: withZoomPlugins({
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return 'Цена: ' + formatNumber(ctx.parsed.y, 2) + ' ₽/шт';
+                                    },
+                                    afterBody: function(tooltipItems) {
+                                        if (!tooltipItems || !tooltipItems.length) return '';
+                                        var ix = tooltipItems[0].dataIndex;
+                                        var it = sortedByUnits[ix];
+                                        if (!it) return '';
+                                        var bn = pickBottleneck(it);
+                                        var lines = ['Макс. выпуск: ' + formatNumber(numberOrZero(it.max_units), 0) + ' шт'];
+                                        if (bn && bn.material) lines.push('Лимит: ' + bn.material);
+                                        return lines;
+                                    }
+                                }
+                            }
+                        }),
                         scales: {
                             x: { ticks: { maxRotation: 45, autoSkip: true } },
                             y: { beginAtZero: true, title: { display: true, text: '₽' } }
@@ -2989,7 +3776,8 @@ async def index() -> HTMLResponse:
                     }
                 });
                 __previewChartInstances.push(ch1);
-                var units = items.map(function(it) { return Number(it.max_units) || 0; });
+                bindChartInteractions(elP, ch1);
+                var units = sortedByUnits.map(function(it) { return numberOrZero(it.max_units); });
                 var ch2 = new Chart(elV, {
                     type: 'bar',
                     data: {
@@ -3006,7 +3794,26 @@ async def index() -> HTMLResponse:
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
+                        plugins: withZoomPlugins({
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return 'Выпуск: ' + formatNumber(ctx.parsed.y, 0) + ' шт';
+                                    },
+                                    afterBody: function(tooltipItems) {
+                                        if (!tooltipItems || !tooltipItems.length) return '';
+                                        var ix = tooltipItems[0].dataIndex;
+                                        var it = sortedByUnits[ix];
+                                        if (!it) return '';
+                                        var lines = ['Цена: ' + formatNumber(numberOrZero(it.unit_price), 2) + ' ₽/шт'];
+                                        var bn = pickBottleneck(it);
+                                        if (bn && bn.material) lines.push('Лимит: ' + bn.material);
+                                        return lines;
+                                    }
+                                }
+                            }
+                        }),
                         scales: {
                             x: { ticks: { maxRotation: 45, autoSkip: true } },
                             y: { beginAtZero: true, title: { display: true, text: 'шт' } }
@@ -3014,6 +3821,106 @@ async def index() -> HTMLResponse:
                     }
                 });
                 __previewChartInstances.push(ch2);
+                bindChartInteractions(elV, ch2);
+                var maxUnits = 0;
+                for (var ui = 0; ui < items.length; ui++) {
+                    maxUnits = Math.max(maxUnits, numberOrZero(items[ui].max_units));
+                }
+                var deficitItems = items.slice().sort(function(a, b) {
+                    return deficitScore(numberOrZero(b.max_units), maxUnits) - deficitScore(numberOrZero(a.max_units), maxUnits);
+                }).slice(0, 12);
+                var deficitLabels = deficitItems.map(function(it) { return shortChartLabel(it.name || '', 26); });
+                var deficitValues = deficitItems.map(function(it) {
+                    return Math.round(deficitScore(numberOrZero(it.max_units), maxUnits));
+                });
+                var ch3 = new Chart(elD, {
+                    type: 'bar',
+                    data: {
+                        labels: deficitLabels,
+                        datasets: [{
+                            label: 'Уровень дефицита',
+                            data: deficitValues,
+                            backgroundColor: deficitValues.map(deficitColor),
+                            borderColor: 'rgba(51, 65, 85, 0.22)',
+                            borderWidth: 1,
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: withZoomPlugins({
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return 'Дефицит: ' + ctx.parsed.x + '%';
+                                    },
+                                    afterBody: function(ctx) {
+                                        if (!ctx || !ctx.length) return '';
+                                        var ix = ctx[0].dataIndex;
+                                        var bottleneck = pickBottleneck(deficitItems[ix]);
+                                        return bottleneck && bottleneck.material ? 'Лимит: ' + bottleneck.material : '';
+                                    }
+                                }
+                            }
+                        }),
+                        scales: {
+                            x: { min: 0, max: 100, title: { display: true, text: '% дефицита' } },
+                            y: { ticks: { autoSkip: false } }
+                        }
+                    }
+                });
+                __previewChartInstances.push(ch3);
+                bindChartInteractions(elD, ch3);
+            }
+
+            if (!window.__betonTargetCalcBound) {
+                window.__betonTargetCalcBound = true;
+                document.addEventListener('click', function(evBetonCalc) {
+                    var btn = evBetonCalc.target && evBetonCalc.target.closest ? evBetonCalc.target.closest('.beton-target-btn') : null;
+                    if (!btn) return;
+                    var det = btn.closest('.beton-def-details');
+                    if (!det) return;
+                    var inp = det.querySelector('.beton-target-input');
+                    var outB = det.querySelector('.beton-target-out');
+                    if (!inp || !outB) return;
+                    var b64 = det.getAttribute('data-mats-b64') || '';
+                    var mats = [];
+                    try {
+                        if (b64 && typeof atob !== 'undefined') {
+                            mats = JSON.parse(decodeURIComponent(escape(atob(b64))));
+                        }
+                    } catch (eParseMats) { mats = []; }
+                    var rawVal = String(inp.value || '').trim().replace(',', '.');
+                    var target = rawVal === '' ? NaN : Number(rawVal);
+                    if (!isFinite(target) || target <= 0) {
+                        outB.innerHTML = '<span class="beton-target-warn">Введите целевой объём больше 0</span>';
+                        outB.hidden = false;
+                        return;
+                    }
+                    var lines = [];
+                    var hasShort = false;
+                    for (var ci = 0; ci < mats.length; ci++) {
+                        var L = mats[ci];
+                        var need = target * numberOrZero(L.required_per_unit);
+                        var av = numberOrZero(L.available);
+                        var shortAmt = need - av;
+                        if (shortAmt > 1e-9) {
+                            hasShort = true;
+                            lines.push('<li><span class="beton-mat-name">' + escapeHtml(String(L.material || '')) + '</span><span class="beton-extra-qty">+ ' + formatNumber(shortAmt, 3) + '</span></li>');
+                        }
+                    }
+                    if (!mats.length) {
+                        outB.innerHTML = '<span class="beton-target-warn">Нет данных рецепта для расчёта</span>';
+                    } else if (!hasShort) {
+                        outB.innerHTML = '<p class="beton-target-ok">На <strong>' + formatNumber(target, 3) + ' м³</strong> по всем строкам рецепта текущих остатков из файла хватает (докупка не нужна).</p>';
+                    } else {
+                        outB.innerHTML = '<div class="beton-extra-head">Докупить к цели ' + formatNumber(target, 3) + ' м³:</div><ul class="beton-extra-list">' + lines.join('') + '</ul>';
+                    }
+                    outB.hidden = false;
+                });
             }
 
             // основная форма расчета: отдельные действия "Посчитать" и "Скачать"
@@ -3113,15 +4020,7 @@ async def index() -> HTMLResponse:
                                     'Самовывоз с НДС 22%'
                                 );
                                 html += '</div>';
-                                html += '<div class="chart-preview">';
-                                html += '<div class="chart-preview-head">';
-                                html += '<div class="chart-preview-title">Графики (пример)</div>';
-                                html += '<div class="chart-preview-hint">Макет для будущей аналитики. Сейчас подставляются данные этого расчёта: сравнение цен за 1 м³ по сценариям и объёмы по видам бетона.</div>';
-                                html += '</div>';
-                                html += '<div class="chart-preview-grid">';
-                                html += '<div class="chart-preview-card"><div class="chart-preview-cap">Цена за 1 м³ — четыре сценария</div><div class="chart-preview-canvas"><canvas id="betonPreviewPrice"></canvas></div></div>';
-                                html += '<div class="chart-preview-card"><div class="chart-preview-cap">Допустимый объём по видам</div><div class="chart-preview-canvas"><canvas id="betonPreviewVol"></canvas></div></div>';
-                                html += '</div></div>';
+                                html += buildBetonAnalyticsHtml(items);
                             } else {
                                 html +=
                                     '<ul class="result-list"><li>Данные по бетонам отсутствуют. Проверьте исходный файл.</li></ul>';
@@ -3286,15 +4185,7 @@ async def index() -> HTMLResponse:
                                     html += '<tr><td><span class="result-name">' + escapeHtml(items[i].name || '') + '</span>' + (limiterText ? '<div class="result-limiter">' + escapeHtml(limiterText) + '</div>' : '') + '</td><td class="result-num">' + String(items[i].max_units != null ? items[i].max_units : 0) + '</td><td class="result-num">' + fmtMoney(items[i].unit_price) + '</td><td class="result-num">' + fmtMoney(items[i].total_price) + '</td></tr>';
                                 }
                                 html += '</tbody></table></div></div>';
-                                html += '<div class="chart-preview">';
-                                html += '<div class="chart-preview-head">';
-                                html += '<div class="chart-preview-title">Графики (пример)</div>';
-                                html += '<div class="chart-preview-hint">Макет для будущей аналитики. Сейчас — цена за 1 шт и максимум штук по изделиям из этого расчёта.</div>';
-                                html += '</div>';
-                                html += '<div class="chart-preview-grid">';
-                                html += '<div class="chart-preview-card"><div class="chart-preview-cap">Цена за 1 шт</div><div class="chart-preview-canvas"><canvas id="jbiPreviewPrice"></canvas></div></div>';
-                                html += '<div class="chart-preview-card"><div class="chart-preview-cap">Максимум изделий, шт</div><div class="chart-preview-canvas"><canvas id="jbiPreviewVol"></canvas></div></div>';
-                                html += '</div></div>';
+                                html += buildJbiAnalyticsHtml(items);
                             } else {
                                 html += '<div class="result-meta">Данные по ЖБИ отсутствуют.</div>';
                             }
