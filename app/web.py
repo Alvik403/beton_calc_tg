@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import os
 import re
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from decimal import Decimal, ROUND_FLOOR
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,7 +26,83 @@ from app.directions import get_all_directions, get_direction, validate_scope
 from app.excel_parser import MaterialConfig, extract_balances
 
 
-app = FastAPI(title="Бетон калькулятор")
+def _config_password_value() -> str:
+    raw = os.environ.get("CONFIG_PASSWORD", "").strip()
+    if os.environ.get("TESTING") == "1":
+        return raw or "test-config-password"
+    if not raw:
+        raise RuntimeError(
+            "CONFIG_PASSWORD must be set to a non-empty value for the web configurator."
+        )
+    return raw
+
+
+def _max_upload_bytes() -> int:
+    raw = os.environ.get("MAX_UPLOAD_MB", "20").strip()
+    try:
+        mb = float(raw)
+    except ValueError:
+        mb = 20.0
+    if mb <= 0:
+        mb = 20.0
+    return int(mb * 1024 * 1024)
+
+
+def _cleanup_old_job_files_once() -> None:
+    from app.tasks import JOBS_DIR
+
+    try:
+        hours_raw = os.environ.get("JOB_FILES_MAX_AGE_HOURS", "24").strip()
+        max_age_h = float(hours_raw)
+    except ValueError:
+        max_age_h = 24.0
+    if max_age_h <= 0:
+        max_age_h = 24.0
+    threshold = time.time() - max_age_h * 3600
+    if not JOBS_DIR.exists():
+        return
+    for path in JOBS_DIR.glob("*.xlsx"):
+        try:
+            if path.stat().st_mtime < threshold:
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+async def _cleanup_jobs_loop() -> None:
+    try:
+        interval = float(os.environ.get("JOB_CLEANUP_INTERVAL_SECONDS", "3600"))
+    except ValueError:
+        interval = 3600.0
+    if interval < 60:
+        interval = 60.0
+    while True:
+        await asyncio.to_thread(_cleanup_old_job_files_once)
+        await asyncio.sleep(interval)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _config_password_value()
+    cleanup_task: asyncio.Task | None = None
+    enabled = os.environ.get("ENABLE_JOB_CLEANUP", "1").strip().lower()
+    if enabled not in ("0", "false", "no"):
+        cleanup_task = asyncio.create_task(_cleanup_jobs_loop())
+    yield
+    if cleanup_task is not None:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Бетон калькулятор", lifespan=lifespan)
+
+
+@app.get("/health")
+async def health() -> Dict[str, str]:
+    return {"status": "ok"}
 
 
 RATE_LIMIT_SECONDS = 10
@@ -31,7 +110,6 @@ _last_request_per_ip: dict[str, float] = {}
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
-CONFIG_PASSWORD = "06032026"
 
 
 def _profiles_path(scope: Optional[str]) -> Path:
@@ -91,7 +169,7 @@ def _build_left_stack_html() -> str:
 
 
 def _require_config_password(request: Request) -> None:
-    if request.headers.get("X-Config-Password") != CONFIG_PASSWORD:
+    if request.headers.get("X-Config-Password") != _config_password_value():
         raise HTTPException(status_code=401, detail="Неверный пароль конфигуратора")
 
 
@@ -152,10 +230,11 @@ def _normalize_name(text: str) -> str:
     return text
 
 
-def _normalize_alias_for_validation(text: str) -> str:
+def _normalize_alias_for_validation(text: str, collapse_units: bool = True) -> str:
     text = text.strip().lower().replace("ё", "е").replace("\xa0", " ")
     text = text.replace("–", "-")
-    text = re.sub(r"\((т|кг|м3|м³)\)", "", text)
+    if collapse_units:
+        text = re.sub(r"\((т|кг|м3|м³)\)", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -256,7 +335,9 @@ def _validate_and_prepare_profile(
             alias_text = str(alias or "").strip()
             if not alias_text:
                 continue
-            normalized_alias = _normalize_alias_for_validation(alias_text)
+            normalized_alias = _normalize_alias_for_validation(
+                alias_text, collapse_units=scope != "jbi"
+            )
             if not normalized_alias or normalized_alias in aliases_seen:
                 continue
             aliases_seen.add(normalized_alias)
@@ -320,6 +401,7 @@ def _validate_and_prepare_profile(
                 _validation_error("recipes", "Материалы состава должны быть объектом", idx)
             )
             recipe_materials = {}
+        recipe_group = str(item.get("group") or "").strip()
 
         sanitized_recipe_materials: Dict[str, float] = {}
         positive_count = 0
@@ -370,7 +452,13 @@ def _validate_and_prepare_profile(
                 )
             )
 
-        recipes.append({"name": recipe_name, "materials": sanitized_recipe_materials})
+        recipes.append(
+            {
+                "name": recipe_name,
+                "group": recipe_group,
+                "materials": sanitized_recipe_materials,
+            }
+        )
 
     price_names_seen: dict[str, int] = {}
     price_fields = (
@@ -466,9 +554,10 @@ def _load_recipes(
     recipes: list[Recipe] = []
     for item in raw:
         name = item.get("name", "").strip()
+        group = str(item.get("group") or "").strip()
         materials = item.get("materials", {})
         if name and materials:
-            recipes.append(Recipe(name=name, materials=materials))
+            recipes.append(Recipe(name=name, materials=materials, group=group))
     return recipes
 
 
@@ -1047,6 +1136,7 @@ def _build_summary(
         items.append(
             {
                 "name": name,
+                "group": recipe.group if recipe is not None else "",
                 "max_m3": float(max_m3),
                 "amounts": {
                     "no_delivery_no_vat": _val(c1),
@@ -1092,6 +1182,7 @@ def _build_jbi_summary(
         items.append(
             {
                 "name": recipe.name,
+                "group": recipe.group,
                 "max_units": max_units,
                 "unit_price": unit_price,
                 "total_price": float(Decimal(str(unit_price)) * Decimal(str(max_units))),
@@ -1758,6 +1849,22 @@ async def index() -> HTMLResponse:
                 background: #ffffff;
             }
             .cfg-table .col-del { width: 28px; text-align: center; }
+            .cfg-recipe-group {
+                border: 1px solid #c7dcf5;
+                border-radius: 10px;
+                background: #f8fbff;
+                margin-bottom: 10px;
+                overflow: hidden;
+            }
+            .cfg-recipe-group summary {
+                cursor: pointer;
+                padding: 8px 10px;
+                color: #123c73;
+                font-size: 12px;
+                font-weight: 600;
+                background: #eef6ff;
+            }
+            .cfg-recipe-group-body { padding: 8px; }
             .cfg-recipe-block {
                 border: 1px solid #d6e6fb;
                 border-radius: 8px;
@@ -1766,8 +1873,13 @@ async def index() -> HTMLResponse:
                 background: linear-gradient(180deg, #ffffff 0%, #f4f9ff 100%);
             }
             .cfg-recipe-block h4 { margin: 0 0 6px; font-size: 12px; }
-            .cfg-recipe-name { margin-bottom: 6px; }
-            .cfg-recipe-name input { width: 100%; max-width: 280px; padding: 4px 6px; font-size: 12px; border-radius: 4px; border: 1px solid #c7dcf5; color: #10233f; background: #ffffff; }
+            .cfg-recipe-name {
+                display: grid;
+                grid-template-columns: minmax(180px, 1.3fr) minmax(140px, 0.9fr);
+                gap: 6px;
+                margin-bottom: 6px;
+            }
+            .cfg-recipe-name input { width: 100%; padding: 4px 6px; font-size: 12px; border-radius: 4px; border: 1px solid #c7dcf5; color: #10233f; background: #ffffff; }
             .cfg-add-row { margin-top: 6px; }
             .cfg-btn-sm {
                 border: none;
@@ -2275,7 +2387,7 @@ async def index() -> HTMLResponse:
                 <div class="cfg-header">
                     <div>
                         <div class="cfg-title" id="cfgTitle">Настройки конфигурации</div>
-                        <div class="cfg-hint">Редактирование работает только для веб-сервиса, бот использует базовую конфигурацию.</div>
+                        <div class="cfg-hint">Редактирование сохраняется в профили веб-сервиса. Базовая конфигурация хранится в YAML.</div>
                     </div>
                     <button type="button" class="cfg-close" id="cfgClose" aria-label="Закрыть">×</button>
                 </div>
@@ -2800,7 +2912,7 @@ async def index() -> HTMLResponse:
                 if (value == null || isNaN(value)) return '—';
                 var fixed = Number(value).toFixed(digits);
                 var parts = fixed.split('.');
-                parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+                parts[0] = parts[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
                 return parts.join('.');
             }
             function setScopeTexts() {
@@ -2853,50 +2965,76 @@ async def index() -> HTMLResponse:
                 var names = materialNames || getAvailableMaterialNames();
                 if (!cfgRecipesList) return;
                 cfgRecipesList.innerHTML = '';
-                for (var i = 0; i < arr.length; i++) {
-                    var rec = arr[i] || {};
-                    var block = document.createElement('div');
-                    block.className = 'cfg-recipe-block';
-                    block.setAttribute('data-idx', String(i));
-                    var matsHtml = '';
-                    var mats = rec.materials && typeof rec.materials === 'object' ? rec.materials : {};
-                    for (var matName in mats) {
-                        if (!Object.prototype.hasOwnProperty.call(mats, matName)) continue;
-                        var kg = mats[matName];
-                        var opts = '';
-                        for (var n = 0; n < names.length; n++) {
-                            opts +=
-                                '<option value="' +
-                                escapeAttr(names[n]) +
-                                '"' +
-                                (names[n] === matName ? ' selected' : '') +
-                                '>' +
-                                escapeHtml(names[n]) +
-                                '</option>';
-                        }
-                        if (names.indexOf(matName) < 0) {
-                            opts =
-                                '<option value="' +
-                                escapeAttr(matName) +
-                                '" selected>' +
-                                escapeHtml(matName) +
-                                '</option>' +
-                                opts;
-                        }
-                        matsHtml +=
-                            '<tr><td><select class="rec-mat-name">' +
-                            opts +
-                            '</select></td><td><input type="number" step="any" class="rec-mat-kg" value="' +
-                            Number(kg) +
-                            '" /></td><td class="col-del"><button type="button" class="cfg-btn-sm cfg-del-rec-row" title="Удалить">✕</button></td></tr>';
+                var groupOrder = [];
+                var groups = {};
+                for (var gi = 0; gi < arr.length; gi++) {
+                    var groupName = String((arr[gi] && arr[gi].group) || '').trim();
+                    var groupKey = groupName || 'Без группы';
+                    if (!groups[groupKey]) {
+                        groups[groupKey] = [];
+                        groupOrder.push(groupKey);
                     }
-                    block.innerHTML =
-                        '<h4>Состав</h4><div class="cfg-recipe-name"><input type="text" class="rec-name" value="' +
-                        escapeAttr(rec.name || '') +
-                        '" placeholder="Наименование позиции" /></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody>' +
-                        matsHtml +
-                        '</tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
-                    cfgRecipesList.appendChild(block);
+                    groups[groupKey].push({ recipe: arr[gi] || {}, idx: gi });
+                }
+                for (var g = 0; g < groupOrder.length; g++) {
+                    var currentGroup = groupOrder[g];
+                    var groupItems = groups[currentGroup] || [];
+                    var details = document.createElement('details');
+                    details.className = 'cfg-recipe-group';
+                    var summary = document.createElement('summary');
+                    summary.textContent = currentGroup + ' (' + groupItems.length + ')';
+                    details.appendChild(summary);
+                    var groupBody = document.createElement('div');
+                    groupBody.className = 'cfg-recipe-group-body';
+                    for (var i = 0; i < groupItems.length; i++) {
+                        var rec = groupItems[i].recipe || {};
+                        var block = document.createElement('div');
+                        block.className = 'cfg-recipe-block';
+                        block.setAttribute('data-idx', String(groupItems[i].idx));
+                        var matsHtml = '';
+                        var mats = rec.materials && typeof rec.materials === 'object' ? rec.materials : {};
+                        for (var matName in mats) {
+                            if (!Object.prototype.hasOwnProperty.call(mats, matName)) continue;
+                            var kg = mats[matName];
+                            var opts = '';
+                            for (var n = 0; n < names.length; n++) {
+                                opts +=
+                                    '<option value="' +
+                                    escapeAttr(names[n]) +
+                                    '"' +
+                                    (names[n] === matName ? ' selected' : '') +
+                                    '>' +
+                                    escapeHtml(names[n]) +
+                                    '</option>';
+                            }
+                            if (names.indexOf(matName) < 0) {
+                                opts =
+                                    '<option value="' +
+                                    escapeAttr(matName) +
+                                    '" selected>' +
+                                    escapeHtml(matName) +
+                                    '</option>' +
+                                    opts;
+                            }
+                            matsHtml +=
+                                '<tr><td><select class="rec-mat-name">' +
+                                opts +
+                                '</select></td><td><input type="number" step="any" class="rec-mat-kg" value="' +
+                                Number(kg) +
+                                '" /></td><td class="col-del"><button type="button" class="cfg-btn-sm cfg-del-rec-row" title="Удалить">✕</button></td></tr>';
+                        }
+                        block.innerHTML =
+                            '<h4>Состав</h4><div class="cfg-recipe-name"><label>Наименование<input type="text" class="rec-name" value="' +
+                            escapeAttr(rec.name || '') +
+                            '" placeholder="Наименование позиции" /></label><label>Группа<input type="text" class="rec-group" value="' +
+                            escapeAttr(rec.group || '') +
+                            '" placeholder="Например: БП 1А" /></label></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody>' +
+                            matsHtml +
+                            '</tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
+                        groupBody.appendChild(block);
+                    }
+                    details.appendChild(groupBody);
+                    cfgRecipesList.appendChild(details);
                 }
             }
 
@@ -2953,6 +3091,8 @@ async def index() -> HTMLResponse:
                 for (var i = 0; i < blocks.length; i++) {
                     var nmEl = blocks[i].querySelector('.rec-name');
                     var name = nmEl ? String(nmEl.value || '').trim() : '';
+                    var groupEl = blocks[i].querySelector('.rec-group');
+                    var group = groupEl ? String(groupEl.value || '').trim() : '';
                     var materials = {};
                     var rows = blocks[i].querySelectorAll('tbody tr');
                     for (var r = 0; r < rows.length; r++) {
@@ -2962,7 +3102,7 @@ async def index() -> HTMLResponse:
                         var kg = kgEl ? parseFloat(kgEl.value) : NaN;
                         if (matName && !isNaN(kg)) materials[matName] = kg;
                     }
-                    out.push({ name: name, materials: materials });
+                    out.push({ name: name, group: group, materials: materials });
                 }
                 return out;
             }
@@ -3181,7 +3321,7 @@ async def index() -> HTMLResponse:
                     }
                     var block = document.createElement('div');
                     block.className = 'cfg-recipe-block';
-                    block.innerHTML = '<h4>Состав</h4><div class="cfg-recipe-name"><input type="text" class="rec-name" placeholder="Наименование позиции" /></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody><tr><td><select class="rec-mat-name">' + opts + '</select></td><td><input type="number" step="any" class="rec-mat-kg" /></td><td class="col-del"><button type="button" class="cfg-btn-sm cfg-del-rec-row" title="Удалить">✕</button></td></tr></tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
+                    block.innerHTML = '<h4>Состав</h4><div class="cfg-recipe-name"><label>Наименование<input type="text" class="rec-name" placeholder="Наименование позиции" /></label><label>Группа<input type="text" class="rec-group" placeholder="Например: БП 1А" /></label></div><div class="cfg-table-wrap"><table class="cfg-table"><thead><tr><th>Материал</th><th>кг</th><th class="col-del"></th></tr></thead><tbody><tr><td><select class="rec-mat-name">' + opts + '</select></td><td><input type="number" step="any" class="rec-mat-kg" /></td><td class="col-del"><button type="button" class="cfg-btn-sm cfg-del-rec-row" title="Удалить">✕</button></td></tr></tbody></table></div><button type="button" class="cfg-btn-sm cfg-add-rec-row">+ Строка</button> <button type="button" class="cfg-btn-sm cfg-del-recipe" title="Удалить состав">Удалить состав</button>';
                     cfgRecipesList.appendChild(block);
                 });
             }
@@ -4372,7 +4512,14 @@ async def upload(
     content = await file.read()
     filename = file.filename or "остатки.xlsx"
 
-    import os
+    max_bytes = _max_upload_bytes()
+    if len(content) > max_bytes:
+        max_mb = max_bytes / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл слишком большой (лимит {max_mb:g} МБ).",
+        )
+
     use_queue = not os.environ.get("TESTING")
     if use_queue:
         try:

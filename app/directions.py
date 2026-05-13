@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import (
+    load_jbi_materials_config,
+    load_jbi_prices_config,
+    load_jbi_recipes_config,
     load_materials_config,
     load_prices_config,
     load_recipes_config,
@@ -14,6 +18,18 @@ from app.config import (
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
+
+
+def profiles_base_dir() -> Path:
+    """Каталог для web_profiles*.json; при WEB_PROFILES_DIR — вне образа (том Docker)."""
+    raw = os.environ.get("WEB_PROFILES_DIR", "").strip()
+    return Path(raw).resolve() if raw else CONFIG_DIR
+
+
+def reset_registry() -> None:
+    """Сброс реестра направлений (тесты или смена WEB_PROFILES_DIR до первого запроса)."""
+    _REGISTRY.clear()
+
 
 # Дефолты для ЖБИ (будут использованы при регистрации направления)
 JBI_BASE_ITEM_NAME = "ЖБИ 1"
@@ -168,9 +184,9 @@ def _jbi_default_prices() -> List[Dict[str, Any]]:
 
 def _jbi_default_config() -> Dict[str, Any]:
     return {
-        "materials": _jbi_default_materials(),
-        "recipes": _jbi_default_recipes(),
-        "prices": _jbi_default_prices(),
+        "materials": load_jbi_materials_config(),
+        "recipes": load_jbi_recipes_config(),
+        "prices": load_jbi_prices_config(),
     }
 
 
@@ -202,10 +218,11 @@ def _register(
 def _init_registry() -> None:
     if _REGISTRY:
         return
+    base = profiles_base_dir()
     _register(
         id="beton",
         display_name="Расчет бетона по остаткам",
-        profiles_path=CONFIG_DIR / "web_profiles.json",
+        profiles_path=base / "web_profiles.json",
         calc_type="m3",
         supports_excel=True,
         get_default_config=_beton_default_config,
@@ -213,7 +230,7 @@ def _init_registry() -> None:
     _register(
         id="jbi",
         display_name="Расчет ЖБИ",
-        profiles_path=CONFIG_DIR / "web_profiles_jbi.json",
+        profiles_path=base / "web_profiles_jbi.json",
         calc_type="units",
         concrete_source="beton",
         supports_excel=True,

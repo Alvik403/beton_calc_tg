@@ -11,6 +11,7 @@ def _sample_profile_payload(scope: str = "beton") -> dict:
     recipes = [
         {
             "name": "Тестовый бетон" if scope == "beton" else "Тестовое ЖБИ",
+            "group": "Тестовая группа",
             "materials": {
                 "Цемент": 100,
                 "Песок": 200,
@@ -119,6 +120,7 @@ def test_profiles_are_saved_independently_by_scope(client, config_password_heade
     jbi_config = client.get("/api/config?scope=jbi", headers=config_password_header).json()
     assert jbi_config["active_profile"] == "jbi-profile"
     assert "Тестовый бетон" in jbi_config["external_materials"]
+    assert jbi_config["recipes"][0]["group"] == "Тестовая группа"
 
 
 def test_upload_supports_beton_summary_excel_and_jbi_summary(make_workbook, client):
@@ -170,8 +172,8 @@ def test_upload_supports_beton_summary_excel_and_jbi_summary(make_workbook, clie
     assert jbi_response.status_code == 200
     jbi_body = jbi_response.json()
     assert jbi_body["kind"] == "jbi"
-    assert len(jbi_body["items"]) == 1
-    assert jbi_body["items"][0]["limiters"]
+    assert len(jbi_body["items"]) > 1
+    assert any(item["limiters"] for item in jbi_body["items"])
 
     web_module._last_request_per_ip.clear()
     jbi_excel = client.post(

@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import yaml
@@ -13,15 +12,13 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def get_bot_token() -> str:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
-    return token
-
-
 def load_materials_config() -> list[dict]:
     data = load_yaml(CONFIG_DIR / "materials.yaml")
+    return data.get("materials", [])
+
+
+def load_jbi_materials_config() -> list[dict]:
+    data = load_yaml(CONFIG_DIR / "jbi_materials.yaml")
     return data.get("materials", [])
 
 
@@ -30,6 +27,16 @@ def load_recipes_config() -> list[dict]:
     return data.get("recipes", [])
 
 
+def load_jbi_recipes_config() -> list[dict]:
+    data = load_yaml(CONFIG_DIR / "jbi_recipes.yaml")
+    return data.get("recipes", [])
+
+
 def load_prices_config() -> list[dict]:
     data = load_yaml(CONFIG_DIR / "prices.yaml")
+    return data.get("prices", [])
+
+
+def load_jbi_prices_config() -> list[dict]:
+    data = load_yaml(CONFIG_DIR / "jbi_prices.yaml")
     return data.get("prices", [])

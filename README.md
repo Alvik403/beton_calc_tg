@@ -1,6 +1,6 @@
 # Beton — калькулятор бетона и ЖБИ по остаткам
 
-Веб-сервис и Telegram-бот для расчёта максимального объёма бетона и количества ЖБИ по остаткам материалов из Excel.
+Веб-сервис для расчёта максимального объёма бетона и количества ЖБИ по остаткам материалов из Excel.
 
 ## Реализовано
 
@@ -13,13 +13,6 @@
 - **Справка** — всплывающее окно с описанием логики и форматов Excel
 - **Динамический UI** — левая панель строится из реестра направлений; добавление направления = новая запись в реестр
 
-### Бот (Telegram, aiogram)
-
-- Принимает Excel .xlsx с остатками
-- Считает максимум м³ по рецептам из `config/`
-- Возвращает отформатированный Excel с результатом
-- Использует только базовую конфигурацию (YAML)
-
 ### Направления
 
 | id    | Отображение               | calc_type | supports_excel | concrete_source |
@@ -31,7 +24,7 @@
 
 ## Быстрый старт
 
-1. Скопируйте `.env.example` в `.env` и укажите `TELEGRAM_BOT_TOKEN`
+1. Скопируйте `.env.example` в `.env` и укажите **`CONFIG_PASSWORD`** (случайная строка для доступа к конфигуратору веба).
 2. При необходимости задайте порт веба на хосте: в `.env` строка `BETON_WEB_PORT=8090` (если заняты 8080/8081 — например другой контейнер слушает `8080`).
 3. Запуск:
 
@@ -40,7 +33,7 @@ docker compose up --build
 ```
 
 - Веб: по умолчанию http://localhost:8081 (или порт из `BETON_WEB_PORT`)
-- Бот: отвечает в Telegram на документы .xlsx
+Если контейнер **`web` постоянно перезапускается** с ошибкой `CONFIG_PASSWORD must be set`: в `.env` добавьте непустую строку **`CONFIG_PASSWORD=...`** (любой надёжный секрет для доступа к конфигуратору). Без этого приложение намеренно не стартует. При `docker compose up` переменная также проверяется при разборе compose — при отсутствии пароля вы увидите сообщение до запуска контейнеров.
 
 ---
 
@@ -56,13 +49,15 @@ beton/
 │   ├── config.py        # Загрузка YAML (materials, recipes, prices)
 │   ├── directions.py    # Реестр направлений (бетон, ЖБИ, …)
 │   ├── excel_parser.py  # Парсинг остатков из Excel
-│   ├── main.py          # Точка входа Telegram-бота
 │   ├── tasks.py         # Celery-задачи обработки Excel
 │   └── web.py           # FastAPI: UI, API, конфигуратор
 ├── config/
-│   ├── materials.yaml   # Материалы и алиасы (бот)
-│   ├── recipes.yaml     # Рецепты бетона (бот)
-│   ├── prices.yaml      # Цены (бот)
+│   ├── materials.yaml   # Материалы и алиасы бетона
+│   ├── recipes.yaml     # Рецепты бетона
+│   ├── prices.yaml      # Цены бетона
+│   ├── jbi_materials.yaml # Материалы и алиасы ЖБИ
+│   ├── jbi_recipes.yaml   # Составы ЖБИ
+│   ├── jbi_prices.yaml    # Цены ЖБИ
 │   ├── web_profiles.json     # Профили веб (бетон)
 │   └── web_profiles_jbi.json # Профили веб (ЖБИ)
 ├── tests/
@@ -91,17 +86,18 @@ Direction(
 ### Поток данных
 
 1. Excel → `extract_balances()` (excel_parser) → `{материал: кг}`
-2. Материалы, рецепты, цены → из YAML или профиля (web) / только YAML (бот)
+2. Материалы, рецепты, цены → из YAML или профиля
 3. Расчёт:
    - **m3**: `calculate_max_cubic_meters()` для каждого рецепта
    - **units**: `_build_jbi_summary()` — max изделий с учётом бетона из `concrete_source`
-4. Результат — JSON (веб) или Excel (веб/бот)
+4. Результат — JSON или Excel
 
 ### API
 
 | Метод | Путь | Назначение |
 |-------|------|------------|
 | GET   | `/` | Главная с UI |
+| GET   | `/health` | Проверка живости сервиса |
 | POST  | `/upload` | Загрузка Excel (file, scope, mode, profile_name) |
 | GET   | `/upload/result/{job_id}` | Статус/результат фоновой задачи |
 | GET   | `/upload/file/{job_id}` | Скачать Excel-результат |
@@ -120,23 +116,23 @@ Direction(
 
 ### Docker
 
-- `redis` — очередь для Celery
+- `redis` — очередь для Celery (порт **не** проброшен на хост; доступ только между контейнерами). Для отладки: `docker compose exec redis redis-cli`
 - `worker` — воркер Celery
 - `web` — FastAPI (uvicorn)
-- `bot` — Telegram-бот
-- volume `beton-jobs` — временные Excel-файлы
+- volume `beton-jobs` — временные Excel-файлы результатов
+- volume `beton-profiles` — `web_profiles.json` / `web_profiles_jbi.json` (переменная `WEB_PROFILES_DIR=/app/var/profiles` у сервисов `web` и `worker`)
 
 ---
 
 ## Настройка
 
-### Рецепты и материалы (бот)
+### Рецепты и материалы
 
 Редактируйте `config/materials.yaml`, `config/recipes.yaml`, `config/prices.yaml`.
 
 ### Конфигуратор (веб)
 
-Пароль по умолчанию задан в `app/web.py` (`CONFIG_PASSWORD`). Передайте в заголовке `X-Config-Password`.
+Задайте **`CONFIG_PASSWORD`** в `.env` (обязательно в проде). Запросы к `/api/config*` передают заголовок `X-Config-Password`. При пустом пароле приложение не стартует (кроме режима тестов с `TESTING=1`).
 
 ### Тесты
 

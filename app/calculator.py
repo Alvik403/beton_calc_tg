@@ -9,6 +9,7 @@ from typing import Any
 class Recipe:
     name: str
     materials: dict[str, float]
+    group: str = ""
 
 
 def calculate_recipe_diagnostics(

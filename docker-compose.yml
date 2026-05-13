@@ -1,8 +1,6 @@
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     restart: unless-stopped
     networks:
       - beton-network
@@ -14,19 +12,12 @@ services:
     command: celery -A app.celery_app worker --loglevel=info
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - WEB_PROFILES_DIR=/app/var/profiles
     volumes:
       - beton-jobs:/app/jobs
+      - beton-profiles:/app/var/profiles
     depends_on:
       - redis
-    restart: unless-stopped
-    networks:
-      - beton-network
-
-  bot:
-    build: .
-    env_file:
-      - .env
-    command: python -m app.main
     restart: unless-stopped
     networks:
       - beton-network
@@ -41,8 +32,12 @@ services:
       - "${BETON_WEB_PORT:-8081}:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - WEB_PROFILES_DIR=/app/var/profiles
+      # Обязательно в .env рядом с compose (Compose подхватывает его для подстановки).
+      - CONFIG_PASSWORD=${CONFIG_PASSWORD:?Задайте CONFIG_PASSWORD в файле .env — см. .env.example}
     volumes:
       - beton-jobs:/app/jobs
+      - beton-profiles:/app/var/profiles
     depends_on:
       - redis
     restart: unless-stopped
@@ -51,6 +46,7 @@ services:
 
 volumes:
   beton-jobs:
+  beton-profiles:
 
 networks:
   beton-network:

@@ -1,4 +1,4 @@
- rom __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
@@ -8,15 +8,18 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 import app.web as web_module
+from app.directions import reset_registry
 
 
 @pytest.fixture(autouse=True)
 def isolate_profile_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TESTING", "1")
-    monkeypatch.setattr(web_module, "PROFILES_PATH", tmp_path / "web_profiles.json")
-    monkeypatch.setattr(web_module, "JBI_PROFILES_PATH", tmp_path / "web_profiles_jbi.json")
+    monkeypatch.setenv("ENABLE_JOB_CLEANUP", "0")
+    monkeypatch.setenv("WEB_PROFILES_DIR", str(tmp_path))
+    reset_registry()
     web_module._last_request_per_ip.clear()
     yield
+    reset_registry()
     web_module._last_request_per_ip.clear()
 
 
@@ -27,8 +30,10 @@ def client():
 
 
 @pytest.fixture
-def config_password_header():
-    return {"X-Config-Password": web_module.CONFIG_PASSWORD}
+def config_password_header(monkeypatch):
+    pwd = "test-config-password"
+    monkeypatch.setenv("CONFIG_PASSWORD", pwd)
+    return {"X-Config-Password": pwd}
 
 
 @pytest.fixture
