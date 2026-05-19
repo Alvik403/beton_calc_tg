@@ -89,7 +89,7 @@ def test_save_profile_returns_structured_validation_errors(client, config_passwo
     assert any("отрицательное значение" in message for message in messages)
     assert any("не может быть отрицательным" in message for message in messages)
 
-def test_profiles_are_saved_independently_by_scope(client, config_password_header):
+def test_single_base_config_is_saved_independently_by_scope(client, config_password_header):
     jbi_payload = _sample_profile_payload("jbi")
     jbi_payload["recipes"][0]["materials"] = {
         "Цемент": 100,
@@ -111,16 +111,42 @@ def test_profiles_are_saved_independently_by_scope(client, config_password_heade
     assert beton_response.status_code == 200
     assert jbi_response.status_code == 200
 
-    beton_options = client.get("/api/config/options?scope=beton").json()
-    jbi_options = client.get("/api/config/options?scope=jbi").json()
-
-    assert [item["name"] for item in beton_options["profiles"]] == ["beton-profile"]
-    assert [item["name"] for item in jbi_options["profiles"]] == ["jbi-profile"]
-
     jbi_config = client.get("/api/config?scope=jbi", headers=config_password_header).json()
-    assert jbi_config["active_profile"] == "jbi-profile"
     assert "Тестовый бетон" in jbi_config["external_materials"]
     assert jbi_config["recipes"][0]["group"] == "Тестовая группа"
+
+
+def test_material_calculator_lists_recipes_and_calculates(client):
+    beton_recipes = client.get("/api/material-calculator/recipes?scope=beton").json()
+    jbi_recipes = client.get("/api/material-calculator/recipes?scope=jbi").json()
+
+    assert beton_recipes["unit"] == "м³"
+    assert jbi_recipes["unit"] == "шт"
+    assert beton_recipes["recipes"]
+    assert jbi_recipes["recipes"]
+
+    recipe_name = beton_recipes["recipes"][0]["name"]
+    response = client.get(
+        "/api/material-calculator",
+        params={"scope": "beton", "recipe": recipe_name, "quantity": 2},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recipe"] == recipe_name
+    assert body["quantity"] == 2
+    assert body["unit"] == "м³"
+    assert body["materials"]
+
+
+def test_material_calculator_validates_input(client):
+    missing = client.get("/api/material-calculator", params={"scope": "beton", "quantity": 1})
+    assert missing.status_code == 400
+
+    unknown = client.get(
+        "/api/material-calculator",
+        params={"scope": "beton", "recipe": "Несуществующая позиция", "quantity": 1},
+    )
+    assert unknown.status_code == 404
 
 
 def test_upload_supports_beton_summary_excel_and_jbi_summary(make_workbook, client):

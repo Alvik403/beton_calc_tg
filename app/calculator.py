@@ -49,6 +49,22 @@ def calculate_max_cubic_meters(
     return max_m3, required
 
 
+def calculate_materials_for_quantity(
+    recipe: Recipe, quantity: float | Decimal
+) -> dict[str, Decimal]:
+    """Расход материалов (кг) на заданный объём/количество изделий."""
+    qty = Decimal(str(quantity))
+    if qty <= 0:
+        return {}
+    required: dict[str, Decimal] = {}
+    for material, per_unit in recipe.materials.items():
+        per_unit_d = Decimal(str(per_unit))
+        if per_unit_d <= 0:
+            continue
+        required[material] = per_unit_d * qty
+    return required
+
+
 def format_recipe_materials_kg(required: dict[str, Decimal], recipe: Recipe) -> str:
     """Многострочный текст расхода материалов (кг) для компактного Excel."""
     lines: list[str] = []

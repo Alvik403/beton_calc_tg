@@ -16,7 +16,12 @@ import pandas as pd
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 
-from app.calculator import Recipe, calculate_max_cubic_meters, calculate_recipe_diagnostics
+from app.calculator import (
+    Recipe,
+    calculate_materials_for_quantity,
+    calculate_max_cubic_meters,
+    calculate_recipe_diagnostics,
+)
 from app.config import (
     load_materials_config,
     load_prices_config,
@@ -110,6 +115,7 @@ _last_request_per_ip: dict[str, float] = {}
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
+SINGLE_BASE_PROFILE_NAME = "__base_web__"
 
 
 def _profiles_path(scope: Optional[str]) -> Path:
@@ -125,13 +131,13 @@ def _build_left_stack_html() -> str:
     directions = get_all_directions()
     parts = []
     legacy_ids = [
-        ("cfgBtn", "calcForm", "mainProfileSelect", "file", "calcOnlyBtn", "downloadBtn"),
-        ("jbiCfgBtn", "jbiForm", "jbiProfileSelect", "jbiFile", "jbiCalcOnlyBtn", "jbiDownloadBtn"),
+        ("cfgBtn", "calcForm", "file", "calcOnlyBtn", "downloadBtn"),
+        ("jbiCfgBtn", "jbiForm", "jbiFile", "jbiCalcOnlyBtn", "jbiDownloadBtn"),
     ]
     for i, d in enumerate(directions):
-        cfg_id, form_id, profile_id, file_id, calc_id, dl_id = (
+        cfg_id, form_id, file_id, calc_id, dl_id = (
             legacy_ids[i] if i < len(legacy_ids) else
-            (f"cfgBtn-{d.id}", f"form-{d.id}", f"profile-{d.id}", f"file-{d.id}", f"calcBtn-{d.id}", f"downloadBtn-{d.id}")
+            (f"cfgBtn-{d.id}", f"form-{d.id}", f"file-{d.id}", f"calcBtn-{d.id}", f"downloadBtn-{d.id}")
         )
         dl_style = ' style="display:none"' if not d.supports_excel else ""
         parts.append(
@@ -143,12 +149,7 @@ def _build_left_stack_html() -> str:
                                 <h1>Загрузка файла</h1>
                                 <form id="{form_id}" method="post" action="/upload" enctype="multipart/form-data" data-scope="{d.id}">
                                     <input type="hidden" name="scope" value="{d.id}" />
-                                    <div class="field">
-                                        <label for="{profile_id}">Считать по настройкам</label>
-                                        <select id="{profile_id}" class="main-profile-select" name="profile_name">
-                                            <option value="__base__">По умолчанию</option>
-                                        </select>
-                                    </div>
+                                    <input type="hidden" name="profile_name" value="__base__" />
                                     <div class="field">
                                         <label for="{file_id}">Файл .xlsx</label>
                                         <input id="{file_id}" name="file" type="file" accept=".xlsx" required />
@@ -166,6 +167,32 @@ def _build_left_stack_html() -> str:
                         </div>'''
         )
     return "\n".join(parts)
+
+
+def _build_material_calculator_html() -> str:
+    """Единый калькулятор материалов под блоками загрузки."""
+    return '''
+                    <div class="box mat-calc-box" id="matCalcBox">
+                        <h1>Калькулятор материалов</h1>
+                        <p class="mat-calc-hint">Введите название позиции (бетон или ЖБИ) и укажите количество.</p>
+                        <div class="field mat-calc-search-wrap">
+                            <label for="matCalcSearch">Позиция</label>
+                            <input id="matCalcSearch" type="text" class="mat-calc-search" placeholder="Начните вводить название" autocomplete="off" />
+                            <div id="matCalcSuggestions" class="mat-calc-suggestions" style="display:none"></div>
+                        </div>
+                        <div class="field">
+                            <label id="matCalcQtyLabel" for="matCalcQty">Количество</label>
+                            <input id="matCalcQty" class="mat-calc-qty" type="number" step="any" min="0" value="1" />
+                        </div>
+                        <button type="button" class="btn mat-calc-btn" id="matCalcBtn">Посчитать материалы</button>
+                        <div id="matCalcResultPanel" class="mat-calc-result-panel" aria-hidden="true">
+                            <div class="mat-calc-result-head">
+                                <span class="mat-calc-result-title">Материалы</span>
+                                <button type="button" class="mat-calc-result-close" id="matCalcResultClose" aria-label="Закрыть">×</button>
+                            </div>
+                            <div id="matCalcResult" class="mat-calc-result"></div>
+                        </div>
+                    </div>'''
 
 
 def _require_config_password(request: Request) -> None:
@@ -202,6 +229,16 @@ def _get_profile(data: Dict[str, Any], name: Optional[str]) -> Optional[Dict[str
     for p in data.get("profiles", []):
         if p.get("name") == name:
             return p
+    return None
+
+
+def _get_active_profile(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    active = _get_profile(data, data.get("active"))
+    if active:
+        return active
+    single_base = _get_profile(data, SINGLE_BASE_PROFILE_NAME)
+    if single_base:
+        return single_base
     return None
 
 
@@ -529,8 +566,11 @@ def _load_materials(
 ) -> list[MaterialConfig]:
     scope = validate_scope(scope)
     profiles = _load_profiles(scope)
-    active_name = profile_name if profile_name is not None else profiles.get("active")
-    active = _get_profile(profiles, active_name)
+    active = (
+        _get_profile(profiles, profile_name)
+        if profile_name is not None
+        else _get_active_profile(profiles)
+    )
     base = _default_config_payload(scope)["materials"]
     raw = active.get("materials") if active and "materials" in active else base
     materials: list[MaterialConfig] = []
@@ -547,8 +587,11 @@ def _load_recipes(
 ) -> list[Recipe]:
     scope = validate_scope(scope)
     profiles = _load_profiles(scope)
-    active_name = profile_name if profile_name is not None else profiles.get("active")
-    active = _get_profile(profiles, active_name)
+    active = (
+        _get_profile(profiles, profile_name)
+        if profile_name is not None
+        else _get_active_profile(profiles)
+    )
     base = _default_config_payload(scope)["recipes"]
     raw = active.get("recipes") if active and "recipes" in active else base
     recipes: list[Recipe] = []
@@ -566,8 +609,11 @@ def _load_prices(
 ) -> dict[str, dict[str, float]]:
     scope = validate_scope(scope)
     profiles = _load_profiles(scope)
-    active_name = profile_name if profile_name is not None else profiles.get("active")
-    active = _get_profile(profiles, active_name)
+    active = (
+        _get_profile(profiles, profile_name)
+        if profile_name is not None
+        else _get_active_profile(profiles)
+    )
     raw_list: List[Dict[str, Any]]
     if active and "prices" in active:
         raw_list = active.get("prices") or []
@@ -1265,11 +1311,63 @@ async def index() -> HTMLResponse:
                 position: sticky;
                 top: 18px;
                 align-self: start;
+                display: flex;
+                flex-direction: column;
+                gap: 18px;
             }
             .left-stack {
                 display: flex;
                 flex-direction: column;
                 gap: 18px;
+            }
+            .mat-calc-box {
+                margin-top: 0;
+                position: relative;
+            }
+            .mat-calc-result-panel {
+                display: none;
+                position: absolute;
+                left: calc(100% + 16px);
+                top: 0;
+                width: min(400px, calc(100vw - 440px));
+                height: auto;
+                overflow: visible;
+                padding: 12px 14px;
+                border-radius: 12px;
+                border: 1px solid #c7dcf5;
+                background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+                box-shadow: 0 12px 28px rgba(33, 93, 168, 0.14);
+                z-index: 15;
+                box-sizing: border-box;
+            }
+            .mat-calc-result-panel.is-open {
+                display: block;
+            }
+            .mat-calc-result-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                margin-bottom: 10px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #e7f0fb;
+            }
+            .mat-calc-result-title {
+                font-size: 14px;
+                font-weight: 600;
+                color: #123c73;
+            }
+            .mat-calc-result-close {
+                border: none;
+                background: transparent;
+                cursor: pointer;
+                font-size: 20px;
+                line-height: 1;
+                color: #6b7280;
+                padding: 0 4px;
+            }
+            .mat-calc-result-close:hover {
+                color: #123c73;
             }
             .rail-section-title {
                 font-size: 20px;
@@ -1472,6 +1570,138 @@ async def index() -> HTMLResponse:
             .stack-section {
                 margin-top: 0;
             }
+            .mat-calc-hint {
+                font-size: 12px;
+                color: #58708f;
+                margin: -4px 0 12px;
+                line-height: 1.4;
+            }
+            .mat-calc-result {
+                margin-top: 0;
+                overflow: visible;
+            }
+            .mat-calc-msg {
+                font-size: 12px;
+                color: #58708f;
+            }
+            .mat-calc-summary {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #123c73;
+                margin-bottom: 8px;
+            }
+            .mat-calc-summary-text {
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+            .mat-calc-copy-btn {
+                flex-shrink: 0;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 28px;
+                height: 28px;
+                border: 1px solid #c7dcf5;
+                border-radius: 6px;
+                background: #eef6ff;
+                color: #1d4ed8;
+                padding: 0;
+                cursor: pointer;
+            }
+            .mat-calc-copy-icon {
+                display: block;
+                width: 16px;
+                height: 16px;
+                pointer-events: none;
+            }
+            .mat-calc-copy-btn:hover {
+                background: #dbeafe;
+                color: #123c73;
+            }
+            .mat-calc-copy-btn.is-copied {
+                background: #dcfce7;
+                border-color: #86efac;
+                color: #166534;
+            }
+            .mat-calc-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+            }
+            .mat-calc-table th,
+            .mat-calc-table td {
+                padding: 6px 8px;
+                border-bottom: 1px solid #e7f0fb;
+                text-align: left;
+                vertical-align: top;
+            }
+            .mat-calc-table th {
+                background: #e8f3ff;
+                color: #29558d;
+                font-weight: 600;
+            }
+            .mat-calc-num {
+                text-align: right;
+                white-space: nowrap;
+                font-variant-numeric: tabular-nums;
+            }
+            input.mat-calc-qty,
+            input.mat-calc-search {
+                width: 100%;
+                border-radius: 8px;
+                border: 1px solid #c7dcf5;
+                padding: 8px 10px;
+                font-size: 14px;
+                background: #ffffff;
+                color: #10233f;
+            }
+            .mat-calc-search-wrap {
+                position: relative;
+            }
+            .mat-calc-suggestions {
+                position: absolute;
+                left: 0;
+                right: 0;
+                top: calc(100% + 4px);
+                z-index: 30;
+                max-height: 240px;
+                overflow-y: auto;
+                border: 1px solid #c7dcf5;
+                border-radius: 8px;
+                background: #ffffff;
+                box-shadow: 0 10px 24px rgba(33, 93, 168, 0.12);
+            }
+            .mat-calc-suggestion {
+                display: block;
+                width: 100%;
+                border: none;
+                border-bottom: 1px solid #e7f0fb;
+                background: #ffffff;
+                text-align: left;
+                padding: 8px 10px;
+                font-size: 13px;
+                color: #10233f;
+                cursor: pointer;
+            }
+            .mat-calc-suggestion:last-child {
+                border-bottom: none;
+            }
+            .mat-calc-suggestion:hover,
+            .mat-calc-suggestion:focus {
+                background: #eaf4ff;
+                outline: none;
+            }
+            .mat-calc-suggestion-group {
+                padding: 6px 10px;
+                font-size: 11px;
+                font-weight: 600;
+                color: #58708f;
+                background: #f4f9ff;
+            }
             .box {
                 border-radius: 12px;
                 border: 1px solid #cfe1f7;
@@ -1653,6 +1883,15 @@ async def index() -> HTMLResponse:
                 }
                 .left-rail {
                     position: static;
+                }
+                .mat-calc-result-panel {
+                    position: static;
+                    left: auto;
+                    width: 100%;
+                    min-height: 0;
+                    margin-top: 12px;
+                    box-shadow: none;
+                    overflow: visible;
                 }
                 .result-box {
                     min-width: 0;
@@ -2372,6 +2611,7 @@ async def index() -> HTMLResponse:
             <div class="help-btn-wrap"><button type="button" class="help-btn" id="helpBtn" title="Справка">?</button></div>
             <div class="page-layout">
                 <div class="left-rail">
+""" + _build_material_calculator_html() + """
                     <div class="left-stack">
 """ + _build_left_stack_html() + """
                     </div>
@@ -2387,21 +2627,17 @@ async def index() -> HTMLResponse:
                 <div class="cfg-header">
                     <div>
                         <div class="cfg-title" id="cfgTitle">Настройки конфигурации</div>
-                        <div class="cfg-hint">Редактирование сохраняется в профили веб-сервиса. Базовая конфигурация хранится в YAML.</div>
+                        <div class="cfg-hint">Всегда используется одна базовая конфигурация. Ее можно редактировать, выгружать и вставлять обратно.</div>
                     </div>
                     <button type="button" class="cfg-close" id="cfgClose" aria-label="Закрыть">×</button>
                 </div>
                 <div class="cfg-footer">
                     <div class="cfg-footer-left">
-                        <select id="cfgProfileSelect" class="cfg-select">
-                            <option value="__base__">Базовая конфигурация</option>
-                        </select>
-                        <button type="button" class="cfg-btn-sec" id="cfgProfileApply">Выбрать</button>
-                        <button type="button" class="cfg-btn-danger" id="cfgProfileDelete">Удалить</button>
+                        <button type="button" class="cfg-btn-sec" id="cfgConfigExport">Выгрузить конфиг</button>
+                        <button type="button" class="cfg-btn-sec" id="cfgConfigImport">Вставить конфиг</button>
                     </div>
                     <div class="cfg-footer-right">
-                        <input id="cfgProfileName" class="cfg-input" placeholder="Имя профиля" />
-                        <button type="button" class="cfg-btn-prim" id="cfgProfileSave">Сохранить профиль</button>
+                        <button type="button" class="cfg-btn-prim" id="cfgProfileSave">Сохранить базовую конфигурацию</button>
                     </div>
                 </div>
                 <div class="cfg-status" id="cfgStatus"></div>
@@ -2566,6 +2802,381 @@ async def index() -> HTMLResponse:
         <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js" crossorigin="anonymous"></script>
         <script>
         document.addEventListener('DOMContentLoaded', function() {
+            function matEscapeHtml(text) {
+                return String(text || '').replace(/</g, '&lt;');
+            }
+            function matFormatNumber(value, digits) {
+                if (value == null || isNaN(value)) return '—';
+                var fixed = Number(value).toFixed(digits);
+                var parts = fixed.split('.');
+                parts[0] = parts[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
+                return parts.join('.');
+            }
+            function initMaterialCalculator() {
+                var box = document.getElementById('matCalcBox');
+                var searchEl = document.getElementById('matCalcSearch');
+                var suggestEl = document.getElementById('matCalcSuggestions');
+                var qtyLabel = document.getElementById('matCalcQtyLabel');
+                var qtyEl = document.getElementById('matCalcQty');
+                var btnEl = document.getElementById('matCalcBtn');
+                var resultPanel = document.getElementById('matCalcResultPanel');
+                var resultClose = document.getElementById('matCalcResultClose');
+                var resultEl = document.getElementById('matCalcResult');
+                if (!box || !searchEl || !suggestEl || !qtyEl || !btnEl || !resultPanel || !resultEl) return;
+
+                function showResultPanel() {
+                    resultPanel.classList.add('is-open');
+                    resultPanel.setAttribute('aria-hidden', 'false');
+                }
+                function hideResultPanel() {
+                    resultPanel.classList.remove('is-open');
+                    resultPanel.setAttribute('aria-hidden', 'true');
+                    resultEl.innerHTML = '';
+                    lastCalcClipboard = null;
+                }
+                function setResultHtml(html) {
+                    resultEl.innerHTML = html;
+                    showResultPanel();
+                }
+                if (resultClose) {
+                    resultClose.addEventListener('click', function() {
+                        hideResultPanel();
+                    });
+                }
+
+                var sectionNames = { beton: 'Бетон', jbi: 'ЖБИ' };
+                var unitByScope = { beton: 'м³', jbi: 'шт' };
+                var recipeCache = { beton: null, jbi: null };
+                var allRecipes = null;
+                var selectedRecipe = null;
+                var lastCalcClipboard = null;
+                var matCalcCopyIconHtml = '<svg class="mat-calc-copy-icon" viewBox="0 0 16 16" aria-hidden="true">' +
+                    '<rect x="5.5" y="5.5" width="8" height="8" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.25"/>' +
+                    '<rect x="2.5" y="2.5" width="8" height="8" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.25"/>' +
+                    '</svg>';
+
+                function buildCalcClipboardText(data) {
+                    if (!data) return '';
+                    var lines = [];
+                    lines.push(
+                        String(data.recipe || '') + ': ' +
+                        matFormatNumber(data.quantity, 3) + ' ' +
+                        String(data.unit || '')
+                    );
+                    var mats = data.materials || [];
+                    for (var i = 0; i < mats.length; i++) {
+                        var amount = mats[i].amount;
+                        var amountText = (amount == null || isNaN(amount))
+                            ? ''
+                            : Number(amount).toFixed(3);
+                        lines.push(String(mats[i].name || '') + '\t' + amountText);
+                    }
+                    return lines.join('\\n');
+                }
+
+                function copyCalcToClipboard(btnEl) {
+                    if (!lastCalcClipboard) return;
+                    var text = buildCalcClipboardText(lastCalcClipboard);
+                    function onCopied() {
+                        if (!btnEl) return;
+                        var prevTitle = btnEl.getAttribute('title') || '';
+                        btnEl.setAttribute('title', 'Скопировано');
+                        btnEl.classList.add('is-copied');
+                        setTimeout(function() {
+                            btnEl.setAttribute('title', prevTitle || 'Копировать материалы и количества');
+                            btnEl.classList.remove('is-copied');
+                        }, 1500);
+                    }
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).then(onCopied).catch(function() {
+                            fallbackCopy(text, onCopied);
+                        });
+                    } else {
+                        fallbackCopy(text, onCopied);
+                    }
+                }
+
+                function fallbackCopy(text, onDone) {
+                    var ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.setAttribute('readonly', '');
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try {
+                        document.execCommand('copy');
+                        if (onDone) onDone();
+                    } catch (eCopy) {}
+                    document.body.removeChild(ta);
+                }
+
+                resultEl.addEventListener('click', function(e) {
+                    var target = e.target;
+                    if (!target || !target.closest) return;
+                    var copyBtn = target.closest('.mat-calc-copy-btn');
+                    if (!copyBtn) return;
+                    copyCalcToClipboard(copyBtn);
+                });
+
+                function updateQtyLabel(unit) {
+                    if (!qtyLabel) return;
+                    qtyLabel.textContent = unit ? ('Количество, ' + unit) : 'Количество';
+                }
+
+                function hideSuggestions() {
+                    suggestEl.style.display = 'none';
+                    suggestEl.innerHTML = '';
+                }
+
+                function loadRecipes(scope) {
+                    if (recipeCache[scope]) {
+                        return Promise.resolve(recipeCache[scope]);
+                    }
+                    return fetch('/api/material-calculator/recipes?scope=' + encodeURIComponent(scope))
+                        .then(function(res) { return res.ok ? res.json() : null; })
+                        .then(function(data) {
+                            if (!data || !data.recipes) {
+                                recipeCache[scope] = [];
+                                return [];
+                            }
+                            if (data.unit) unitByScope[scope] = data.unit;
+                            recipeCache[scope] = data.recipes;
+                            return recipeCache[scope];
+                        })
+                        .catch(function() {
+                            recipeCache[scope] = [];
+                            return [];
+                        });
+                }
+
+                function buildAllRecipes() {
+                    var merged = [];
+                    var scopes = ['beton', 'jbi'];
+                    for (var s = 0; s < scopes.length; s++) {
+                        var scope = scopes[s];
+                        var list = recipeCache[scope] || [];
+                        for (var i = 0; i < list.length; i++) {
+                            merged.push({
+                                name: list[i].name,
+                                group: list[i].group || '',
+                                scope: scope,
+                                unit: unitByScope[scope] || '',
+                                section: sectionNames[scope] || scope
+                            });
+                        }
+                    }
+                    merged.sort(function(a, b) {
+                        var sa = (a.section + '\\0' + a.group + '\\0' + a.name).toLowerCase();
+                        var sb = (b.section + '\\0' + b.group + '\\0' + b.name).toLowerCase();
+                        if (sa < sb) return -1;
+                        if (sa > sb) return 1;
+                        return 0;
+                    });
+                    allRecipes = merged;
+                    return merged;
+                }
+
+                function loadAllRecipes() {
+                    return Promise.all([loadRecipes('beton'), loadRecipes('jbi')]).then(function() {
+                        return buildAllRecipes();
+                    });
+                }
+
+                function filterRecipes(query) {
+                    var list = allRecipes || [];
+                    var q = String(query || '').trim().toLowerCase();
+                    if (!q) return list.slice(0, 40);
+                    return list.filter(function(item) {
+                        return String(item.name || '').toLowerCase().indexOf(q) >= 0;
+                    }).slice(0, 40);
+                }
+
+                function suggestionGroupLabel(item) {
+                    var groupName = String(item.group || '').trim() || 'Без группы';
+                    return item.section + ' — ' + groupName;
+                }
+
+                function renderSuggestions(items) {
+                    suggestEl.innerHTML = '';
+                    if (!items.length) {
+                        hideSuggestions();
+                        return;
+                    }
+                    var lastGroup = null;
+                    for (var i = 0; i < items.length; i++) {
+                        var groupLabel = suggestionGroupLabel(items[i]);
+                        if (groupLabel !== lastGroup) {
+                            var groupEl = document.createElement('div');
+                            groupEl.className = 'mat-calc-suggestion-group';
+                            groupEl.textContent = groupLabel;
+                            suggestEl.appendChild(groupEl);
+                            lastGroup = groupLabel;
+                        }
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'mat-calc-suggestion';
+                        btn.textContent = items[i].name;
+                        btn.setAttribute('data-name', items[i].name);
+                        btn.setAttribute('data-scope', items[i].scope);
+                        btn.setAttribute('data-unit', items[i].unit);
+                        suggestEl.appendChild(btn);
+                    }
+                    suggestEl.style.display = 'block';
+                }
+
+                function findRecipesByName(name) {
+                    var list = allRecipes || [];
+                    var matches = [];
+                    for (var i = 0; i < list.length; i++) {
+                        if (list[i].name === name) matches.push(list[i]);
+                    }
+                    return matches;
+                }
+
+                function resolveRecipe(text) {
+                    var name = String(text || '').trim();
+                    if (!name) return null;
+                    if (selectedRecipe && selectedRecipe.name === name) return selectedRecipe;
+
+                    var exact = findRecipesByName(name);
+                    if (exact.length === 1) return exact[0];
+
+                    var q = name.toLowerCase();
+                    var partial = [];
+                    for (var j = 0; j < (allRecipes || []).length; j++) {
+                        var item = allRecipes[j];
+                        var itemName = String(item.name || '');
+                        if (itemName.toLowerCase() === q) exact.push(item);
+                        else if (itemName.toLowerCase().indexOf(q) >= 0) partial.push(item);
+                    }
+                    var seen = {};
+                    var uniqueExact = [];
+                    for (var e = 0; e < exact.length; e++) {
+                        var key = exact[e].scope + '\\0' + exact[e].name;
+                        if (!seen[key]) {
+                            seen[key] = true;
+                            uniqueExact.push(exact[e]);
+                        }
+                    }
+                    if (uniqueExact.length === 1) return uniqueExact[0];
+
+                    seen = {};
+                    var uniquePartial = [];
+                    for (var p = 0; p < partial.length; p++) {
+                        var pkey = partial[p].scope + '\\0' + partial[p].name;
+                        if (!seen[pkey]) {
+                            seen[pkey] = true;
+                            uniquePartial.push(partial[p]);
+                        }
+                    }
+                    if (uniquePartial.length === 1) return uniquePartial[0];
+                    return null;
+                }
+
+                function refreshSuggestions() {
+                    return loadAllRecipes().then(function() {
+                        renderSuggestions(filterRecipes(searchEl.value));
+                    });
+                }
+
+                searchEl.addEventListener('input', function() {
+                    selectedRecipe = null;
+                    updateQtyLabel('');
+                    refreshSuggestions();
+                });
+                searchEl.addEventListener('focus', function() {
+                    refreshSuggestions();
+                });
+
+                suggestEl.addEventListener('click', function(e) {
+                    var target = e.target;
+                    if (!target || !target.getAttribute) return;
+                    var picked = target.getAttribute('data-name');
+                    var scope = target.getAttribute('data-scope');
+                    var unit = target.getAttribute('data-unit');
+                    if (!picked || !scope) return;
+                    searchEl.value = picked;
+                    selectedRecipe = { name: picked, scope: scope, unit: unit || unitByScope[scope] || '' };
+                    updateQtyLabel(selectedRecipe.unit);
+                    hideSuggestions();
+                });
+
+                document.addEventListener('click', function(e) {
+                    if (!box.contains(e.target)) hideSuggestions();
+                });
+
+                btnEl.addEventListener('click', function() {
+                    lastCalcClipboard = null;
+                    var picked = resolveRecipe(searchEl.value);
+                    if (!picked) {
+                        setResultHtml('<div class="mat-calc-msg">Укажите или выберите позицию из списка.</div>');
+                        return;
+                    }
+                    selectedRecipe = picked;
+                    updateQtyLabel(picked.unit);
+                    var recipe = picked.name;
+                    var scope = picked.scope;
+                    var qty = parseFloat(qtyEl.value);
+                    if (!qty || qty <= 0 || isNaN(qty)) {
+                        setResultHtml('<div class="mat-calc-msg">Укажите количество больше нуля.</div>');
+                        return;
+                    }
+                    setResultHtml('<div class="mat-calc-msg">Считаем...</div>');
+                    fetch(
+                        '/api/material-calculator?scope=' + encodeURIComponent(scope) +
+                        '&recipe=' + encodeURIComponent(recipe) +
+                        '&quantity=' + encodeURIComponent(qty)
+                    )
+                        .then(function(res) {
+                            if (!res.ok) {
+                                return res.json().then(function(body) {
+                                    var detail = body && body.detail ? body.detail : 'Ошибка расчёта';
+                                    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+                                });
+                            }
+                            return res.json();
+                        })
+                        .then(function(data) {
+                            searchEl.value = data.recipe || recipe;
+                            if (data.unit) picked.unit = data.unit;
+                            selectedRecipe = picked;
+                            updateQtyLabel(data.unit || picked.unit);
+                            lastCalcClipboard = {
+                                recipe: data.recipe || recipe,
+                                quantity: data.quantity,
+                                unit: data.unit || '',
+                                materials: data.materials || []
+                            };
+                            var html = '<div class="mat-calc-summary">' +
+                                '<span class="mat-calc-summary-text">' +
+                                matEscapeHtml(data.recipe) + ': ' +
+                                matFormatNumber(data.quantity, 3) + ' ' +
+                                matEscapeHtml(data.unit || '') +
+                                '</span>' +
+                                '<button type="button" class="mat-calc-copy-btn" title="Копировать материалы и количества" aria-label="Копировать">' +
+                                matCalcCopyIconHtml + '</button>' +
+                                '</div>';
+                            html += '<table class="mat-calc-table"><thead><tr><th>Материал</th><th>кг</th></tr></thead><tbody>';
+                            var mats = data.materials || [];
+                            for (var m = 0; m < mats.length; m++) {
+                                html += '<tr><td>' + matEscapeHtml(mats[m].name) + '</td><td class="mat-calc-num">' +
+                                    matFormatNumber(mats[m].amount, 3) + '</td></tr>';
+                            }
+                            html += '</tbody></table>';
+                            setResultHtml(html);
+                        })
+                        .catch(function(err) {
+                            setResultHtml('<div class="mat-calc-msg">' + matEscapeHtml(err.message || String(err)) + '</div>');
+                        });
+                });
+
+                loadAllRecipes();
+            }
+            initMaterialCalculator();
+
+
+
             if (typeof Chart !== 'undefined' && window.ChartZoom) {
                 try {
                     Chart.register(window.ChartZoom);
@@ -2578,13 +3189,10 @@ async def index() -> HTMLResponse:
 
             var cfgClose = document.getElementById('cfgClose');
             var cfgTitle = document.getElementById('cfgTitle');
-            var sel = document.getElementById('cfgProfileSelect');
             var saveBtn = document.getElementById('cfgProfileSave');
-            var applyBtn = document.getElementById('cfgProfileApply');
-            var delBtn = document.getElementById('cfgProfileDelete');
-            var nameInput = document.getElementById('cfgProfileName');
+            var exportBtn = document.getElementById('cfgConfigExport');
+            var importBtn = document.getElementById('cfgConfigImport');
             var cfgStatus = document.getElementById('cfgStatus');
-            var mainProfileSelect = document.getElementById('mainProfileSelect');
             var cfgMaterialsBody = document.getElementById('cfgMaterialsBody');
             var cfgRecipesList = document.getElementById('cfgRecipesList');
             var cfgPricesBody = document.getElementById('cfgPricesBody');
@@ -2593,7 +3201,6 @@ async def index() -> HTMLResponse:
             var calcOnlyBtn = document.getElementById('calcOnlyBtn');
             var downloadBtn = document.getElementById('downloadBtn');
             var jbiForm = document.getElementById('jbiForm');
-            var jbiProfileSelect = document.getElementById('jbiProfileSelect');
             var jbiCalcOnlyBtn = document.getElementById('jbiCalcOnlyBtn');
             var jbiDownloadBtn = document.getElementById('jbiDownloadBtn');
 
@@ -2626,7 +3233,6 @@ async def index() -> HTMLResponse:
             }
             function clearConfigErrors() {
                 clearConfigStatus();
-                if (nameInput) nameInput.classList.remove('cfg-error-input');
                 var fields = cfgPanel.querySelectorAll('.cfg-error-field');
                 for (var f = 0; f < fields.length; f++) fields[f].classList.remove('cfg-error-field');
                 if (cfgMaterialsBody) {
@@ -2679,15 +3285,6 @@ async def index() -> HTMLResponse:
                     var msg = error && error.message ? String(error.message) : '';
                     var idx = typeof error.index === 'number' ? error.index : -1;
                     messages.push('• ' + humanizeValidationMessage(error));
-                    if (error.field === 'name') {
-                        if (!firstTab) firstTab = 'materials';
-                        if (nameInput) {
-                            nameInput.classList.add('cfg-error-input');
-                            markField(nameInput);
-                            if (!firstEl) firstEl = nameInput;
-                        }
-                        continue;
-                    }
                     if (error.field === 'materials') {
                         if (!firstTab) firstTab = 'materials';
                         if (cfgMaterialsBody && idx >= 0) {
@@ -2843,39 +3440,6 @@ async def index() -> HTMLResponse:
                 cfgPanel.style.display = 'none';
             }
 
-            function fillProfileSelect(selectEl, profiles, active) {
-                if (!selectEl) return;
-                selectEl.innerHTML = '<option value="__base__">По умолчанию</option>';
-                for (var i = 0; i < profiles.length; i++) {
-                    var opt = document.createElement('option');
-                    opt.value = profiles[i].name;
-                    opt.textContent = profiles[i].name;
-                    selectEl.appendChild(opt);
-                }
-                selectEl.value = active || '__base__';
-            }
-            function loadProfileOptions(scope, selectEl) {
-                if (!selectEl || !window.fetch) return;
-                return fetch('/api/config/options?scope=' + encodeURIComponent(scope))
-                    .then(function(res) {
-                        if (!res.ok) return null;
-                        return res.json();
-                    })
-                    .then(function(data) {
-                        if (!data) return;
-                        fillProfileSelect(selectEl, data.profiles || [], data.active_profile || '__base__');
-                    })
-                    .catch(function(e) {
-                        console.error(e);
-                    });
-            }
-            function loadMainProfileSelects() {
-                loadProfileOptions('beton', mainProfileSelect);
-                loadProfileOptions('jbi', jbiProfileSelect);
-            }
-
-            loadMainProfileSelects();
-
             cfgBtn.addEventListener('click', function() { openPanel('beton'); });
             if (jbiCfgBtn) jbiCfgBtn.addEventListener('click', function() { openPanel('jbi'); });
 
@@ -2899,7 +3463,6 @@ async def index() -> HTMLResponse:
                 var block = safeClosest(e.target, '.cfg-recipe-block');
                 if (row) row.classList.remove('cfg-error-row');
                 if (block) block.classList.remove('cfg-error-block');
-                if (e.target === nameInput) nameInput.classList.remove('cfg-error-input');
             });
 
             function escapeAttr(s) {
@@ -3133,6 +3696,43 @@ async def index() -> HTMLResponse:
                 return out;
             }
 
+            function getConfigPayloadFromUI() {
+                return {
+                    scope: currentConfigScope,
+                    materials: getMaterialsFromUI(),
+                    recipes: getRecipesFromUI(),
+                    prices: getPricesFromUI(),
+                };
+            }
+
+            function applyConfigPayloadToUI(payload) {
+                payload = payload || {};
+                var imported = payload;
+                if (Array.isArray(payload.profiles) && payload.profiles.length) {
+                    imported = payload.profiles[0] || {};
+                }
+                renderMaterials(imported.materials || []);
+                var mats = imported.materials || [];
+                var names = [];
+                for (var i = 0; i < mats.length; i++) names.push(mats[i].name);
+                for (var j = 0; j < currentExternalMaterialNames.length; j++) names.push(currentExternalMaterialNames[j]);
+                renderRecipes(imported.recipes || [], names);
+                renderPrices(imported.prices || []);
+            }
+
+            function downloadConfigPayload(payload) {
+                var text = JSON.stringify(payload, null, 2);
+                var blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+                var a = document.createElement('a');
+                var suffix = currentConfigScope === 'jbi' ? 'jbi' : 'beton';
+                a.href = URL.createObjectURL(blob);
+                a.download = 'base-config-' + suffix + '.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+            }
+
             function loadConfig(password) {
                 if (!window.fetch) return;
                 clearConfigErrors();
@@ -3147,17 +3747,6 @@ async def index() -> HTMLResponse:
                         return res.json();
                     })
                     .then(function(data) {
-                        if (sel) {
-                            sel.innerHTML = '<option value="__base__">Базовая конфигурация</option>';
-                            var profiles = data.profiles || [];
-                            for (var i = 0; i < profiles.length; i++) {
-                                var opt = document.createElement('option');
-                                opt.value = profiles[i].name;
-                                opt.textContent = profiles[i].name;
-                                sel.appendChild(opt);
-                            }
-                            sel.value = data.active_profile || '__base__';
-                        }
                         renderMaterials(data.materials || []);
                         currentExternalMaterialNames = data.external_materials || [];
                         var mats = data.materials || [];
@@ -3166,7 +3755,6 @@ async def index() -> HTMLResponse:
                         for (var i3 = 0; i3 < currentExternalMaterialNames.length; i3++) names.push(currentExternalMaterialNames[i3]);
                         renderRecipes(data.recipes || [], names);
                         renderPrices(data.prices || []);
-                        loadMainProfileSelects();
                         clearConfigStatus();
                         cfgPanel.style.display = 'flex';
                     })
@@ -3186,20 +3774,8 @@ async def index() -> HTMLResponse:
                 saveBtn.addEventListener('click', function() {
                     clearConfigErrors();
                     reindexConfigUI();
-                    var name = nameInput ? String(nameInput.value || '').trim() : '';
-                    if (!name) {
-                        if (nameInput) nameInput.classList.add('cfg-error-input');
-                        showConfigStatus('Введите имя профиля, чтобы сохранить настройки.');
-                        return;
-                    }
                     if (!window.fetch) return;
-                    var body = {
-                        name: name,
-                        scope: currentConfigScope,
-                        recipes: getRecipesFromUI(),
-                        prices: getPricesFromUI(),
-                        materials: getMaterialsFromUI(),
-                    };
+                    var body = getConfigPayloadFromUI();
                     configFetch('/api/config/profile', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -3210,7 +3786,7 @@ async def index() -> HTMLResponse:
                                 clearConfigErrors();
                                 return null;
                             }
-                            return parseResponseError(res, 'Не удалось сохранить профиль.').then(function(error) {
+                            return parseResponseError(res, 'Не удалось сохранить базовую конфигурацию.').then(function(error) {
                                 if (error.errors && error.errors.length) {
                                     applyValidationErrors(error.errors);
                                 } else {
@@ -3220,14 +3796,7 @@ async def index() -> HTMLResponse:
                             });
                         })
                         .then(function() {
-                            var p = loadConfig();
-                            if (p && p.then && sel) {
-                                p.then(function() {
-                                    sel.value = name;
-                                });
-                            } else if (sel) {
-                                sel.value = name;
-                            }
+                            showConfigStatus('Базовая конфигурация сохранена.');
                         })
                         .catch(function(e) {
                             if (e && e.message === 'Ошибка валидации конфигурации') return;
@@ -3236,58 +3805,27 @@ async def index() -> HTMLResponse:
                 });
             }
 
-            if (applyBtn) {
-                applyBtn.addEventListener('click', function() {
-                    if (!window.fetch) return;
-                    var name = sel ? sel.value : '__base__';
-                    configFetch('/api/config/profile/select', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: name, scope: currentConfigScope }),
-                    })
-                        .then(function(res) {
-                            if (res.ok) {
-                                clearConfigErrors();
-                                return null;
-                            }
-                            return parseResponseError(res, 'Не удалось выбрать профиль.').then(function(error) {
-                                throw new Error(error.message);
-                            });
-                        })
-                        .then(function() {
-                            loadConfig();
-                        })
-                        .catch(function(e) {
-                            showConfigStatus(e && e.message ? e.message : String(e));
-                        });
+            if (exportBtn) {
+                exportBtn.addEventListener('click', function() {
+                    clearConfigErrors();
+                    reindexConfigUI();
+                    downloadConfigPayload(getConfigPayloadFromUI());
+                    showConfigStatus('Конфигурация выгружена в JSON.');
                 });
             }
 
-            if (delBtn) {
-                delBtn.addEventListener('click', function() {
-                    if (!window.fetch) return;
-                    var name = sel ? sel.value : '__base__';
-                    if (name === '__base__') {
-                        showConfigStatus('Базовую конфигурацию удалить нельзя.');
-                        return;
+            if (importBtn) {
+                importBtn.addEventListener('click', function() {
+                    clearConfigErrors();
+                    var raw = window.prompt('Вставьте JSON конфигурации. После вставки нажмите "Сохранить базовую конфигурацию".');
+                    if (!raw) return;
+                    try {
+                        var parsed = JSON.parse(raw);
+                        applyConfigPayloadToUI(parsed);
+                        showConfigStatus('Конфигурация вставлена. Проверьте данные и сохраните базовую конфигурацию.');
+                    } catch (e) {
+                        showConfigStatus('Не удалось прочитать JSON конфигурации: ' + (e && e.message ? e.message : String(e)));
                     }
-                    if (!confirm('Удалить набор настроек "' + name + '"?')) return;
-                    configFetch('/api/config/profile/' + encodeURIComponent(name) + '?scope=' + encodeURIComponent(currentConfigScope), { method: 'DELETE' })
-                        .then(function(res) {
-                            if (res.ok) {
-                                clearConfigErrors();
-                                return null;
-                            }
-                            return parseResponseError(res, 'Не удалось удалить профиль.').then(function(error) {
-                                throw new Error(error.message);
-                            });
-                        })
-                        .then(function() {
-                            loadConfig();
-                        })
-                        .catch(function(e) {
-                            showConfigStatus(e && e.message ? e.message : String(e));
-                        });
                 });
             }
 
@@ -4083,7 +4621,7 @@ async def index() -> HTMLResponse:
                     var fd = new FormData(calcForm);
                     fd.set('mode', shouldDownload ? 'excel' : 'summary');
                     fd.set('scope', 'beton');
-                    fd.set('profile_name', mainProfileSelect ? mainProfileSelect.value : '__base__');
+                    fd.set('profile_name', '__base__');
 
                     function renderBetonSummary(result) {
                             var items = result.items || [];
@@ -4297,7 +4835,7 @@ async def index() -> HTMLResponse:
                     var fdJbi = new FormData(jbiForm);
                     fdJbi.set('mode', shouldDownload ? 'excel' : 'summary');
                     fdJbi.set('scope', 'jbi');
-                    fdJbi.set('profile_name', jbiProfileSelect ? jbiProfileSelect.value : '__base__');
+                    fdJbi.set('profile_name', '__base__');
 
                     function renderJbiSummary(summary) {
                             var items = summary.items || [];
@@ -4497,7 +5035,7 @@ async def upload(
         raise HTTPException(status_code=400, detail="Spam detected")
 
     scope = validate_scope(scope)
-    selected_profile = None if profile_name == "__base__" else profile_name
+    selected_profile = None
 
     ip = _client_ip(request)
     if mode == "excel" and _is_rate_limited(ip):
@@ -4584,6 +5122,53 @@ async def upload_file(job_id: str):
     )
 
 
+def _material_calculator_unit(scope: str) -> str:
+    return "м³" if get_direction(scope).calc_type == "m3" else "шт"
+
+
+@app.get("/api/material-calculator/recipes")
+async def api_material_calculator_recipes(scope: str = "beton") -> Dict[str, Any]:
+    scope = validate_scope(scope)
+    recipes = _load_recipes(scope=scope)
+    items = sorted(
+        [{"name": r.name, "group": r.group or ""} for r in recipes],
+        key=lambda item: (item["group"].lower(), item["name"].lower()),
+    )
+    return {"scope": scope, "unit": _material_calculator_unit(scope), "recipes": items}
+
+
+@app.get("/api/material-calculator")
+async def api_material_calculator(
+    scope: str = "beton",
+    recipe: str = "",
+    quantity: float = 1.0,
+) -> Dict[str, Any]:
+    scope = validate_scope(scope)
+    recipe_name = recipe.strip()
+    if not recipe_name:
+        raise HTTPException(status_code=400, detail="Укажите позицию")
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+
+    recipes = _load_recipes(scope=scope)
+    found = next((item for item in recipes if item.name == recipe_name), None)
+    if not found:
+        raise HTTPException(status_code=404, detail="Позиция не найдена")
+
+    required = calculate_materials_for_quantity(found, quantity)
+    return {
+        "scope": scope,
+        "recipe": found.name,
+        "group": found.group,
+        "quantity": float(quantity),
+        "unit": _material_calculator_unit(scope),
+        "materials": [
+            {"name": name, "amount": float(amount)}
+            for name, amount in sorted(required.items(), key=lambda item: item[0].lower())
+        ],
+    }
+
+
 @app.get("/api/directions")
 async def api_get_directions() -> List[Dict[str, Any]]:
     """Список направлений расчёта для динамического UI."""
@@ -4599,25 +5184,12 @@ async def api_get_directions() -> List[Dict[str, Any]]:
     ]
 
 
-@app.get("/api/config/options")
-async def api_get_config_options(scope: str = "beton") -> Dict[str, Any]:
-    scope = validate_scope(scope)
-    profiles = _load_profiles(scope)
-    active_name: Optional[str] = profiles.get("active")
-    return {
-        "profiles": [{"name": p.get("name", "")} for p in profiles.get("profiles", [])],
-        "active_profile": active_name or "__base__",
-        "scope": scope,
-    }
-
-
 @app.get("/api/config")
 async def api_get_config(request: Request, scope: str = "beton") -> Dict[str, Any]:
     _require_config_password(request)
     scope = validate_scope(scope)
     profiles = _load_profiles(scope)
-    active_name: Optional[str] = profiles.get("active")
-    active_profile = _get_profile(profiles, active_name)
+    active_profile = _get_active_profile(profiles)
 
     base = _default_config_payload(scope)
     materials = active_profile.get("materials") if active_profile and "materials" in active_profile else base["materials"]
@@ -4628,8 +5200,6 @@ async def api_get_config(request: Request, scope: str = "beton") -> Dict[str, An
         "materials": materials,
         "recipes": recipes,
         "prices": prices,
-        "profiles": [{"name": p.get("name", "")} for p in profiles.get("profiles", [])],
-        "active_profile": active_name or "__base__",
         "scope": scope,
         "external_materials": (
             [r.name for r in _load_recipes(scope=src)]
@@ -4645,70 +5215,18 @@ async def api_save_profile(
 ) -> Dict[str, str]:
     _require_config_password(request)
     scope = validate_scope(payload.get("scope"))
+    payload = dict(payload)
+    payload["name"] = SINGLE_BASE_PROFILE_NAME
     validated = _validate_and_prepare_profile(payload, scope=scope)
-    name = validated["name"]
-
-    profiles = _load_profiles(scope)
-    prof_list = profiles.get("profiles", [])
 
     new_profile = {
-        "name": name,
+        "name": SINGLE_BASE_PROFILE_NAME,
         "materials": validated["materials"],
         "recipes": validated["recipes"],
         "prices": validated["prices"],
     }
 
-    replaced = False
-    for idx, p in enumerate(prof_list):
-        if p.get("name") == name:
-            prof_list[idx] = new_profile
-            replaced = True
-            break
-    if not replaced:
-        prof_list.append(new_profile)
-
-    profiles["profiles"] = prof_list
-    profiles["active"] = name
-    _save_profiles(profiles, scope)
-    return {"status": "ok"}
-
-
-@app.post("/api/config/profile/select")
-async def api_select_profile(
-    request: Request, payload: Dict[str, Any] = Body(...)
-) -> Dict[str, str]:
-    _require_config_password(request)
-    scope = validate_scope(payload.get("scope"))
-    name = (payload.get("name") or "").strip()
-
-    profiles = _load_profiles(scope)
-    if name == "__base__" or not name:
-        profiles["active"] = None
-        _save_profiles(profiles, scope)
-        return {"status": "ok"}
-
-    if not _get_profile(profiles, name):
-        raise HTTPException(status_code=404, detail="Профиль не найден")
-
-    profiles["active"] = name
-    _save_profiles(profiles, scope)
-    return {"status": "ok"}
-
-
-@app.delete("/api/config/profile/{name}")
-async def api_delete_profile(
-    name: str, request: Request, scope: str = "beton"
-) -> Dict[str, str]:
-    _require_config_password(request)
-    scope = validate_scope(scope)
-    if name == "__base__":
-        raise HTTPException(status_code=400, detail="Базовый профиль удалить нельзя")
-    profiles = _load_profiles(scope)
-    prof_list = profiles.get("profiles", [])
-    prof_list = [p for p in prof_list if p.get("name") != name]
-    profiles["profiles"] = prof_list
-    if profiles.get("active") == name:
-        profiles["active"] = None
+    profiles = {"profiles": [new_profile], "active": SINGLE_BASE_PROFILE_NAME}
     _save_profiles(profiles, scope)
     return {"status": "ok"}
 

@@ -1,6 +1,11 @@
 from decimal import Decimal
 
-from app.calculator import Recipe, calculate_max_cubic_meters, calculate_recipe_diagnostics
+from app.calculator import (
+    Recipe,
+    calculate_materials_for_quantity,
+    calculate_max_cubic_meters,
+    calculate_recipe_diagnostics,
+)
 
 
 def test_calculate_max_cubic_meters_uses_limiting_material_and_returns_required_amounts():
@@ -82,4 +87,17 @@ def test_calculate_recipe_diagnostics_returns_limiting_materials():
     assert limiters[0]["required_per_unit"] == Decimal("900")
     assert len(all_diag) == 3
     assert {d["material"] for d in all_diag} == {"cement", "sand", "gravel"}
+
+
+def test_calculate_materials_for_quantity_multiplies_recipe_norms():
+    recipe = Recipe(
+        name="БСТ B20",
+        materials={"cement": 250, "sand": 900, "water": 0},
+    )
+
+    required = calculate_materials_for_quantity(recipe, 2)
+
+    assert required["cement"] == Decimal("500")
+    assert required["sand"] == Decimal("1800")
+    assert "water" not in required
 
